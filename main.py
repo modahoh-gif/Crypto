@@ -5144,8 +5144,27 @@ async def reject_investor_signal(cb: types.CallbackQuery):
 
     await cb.message.edit_text("❌ تم تجاهل الإشارة ولن يتم إرسالها.")
 # ====================================================================
-# 🦅 THE INSTITUTIONAL APEX SCANNER (Dual-AI Engine)
+# 🦅 THE INSTITUTIONAL APEX SCANNER (Tier-1 Dual-AI Engine)
 # ====================================================================
+
+# 🛠️ [دالة مساعدة جديدة] - يجب وضعها خارج الدالة الرئيسية لنقل معالجة Pandas الثقيلة للخلفية
+def prepare_macro_candles_sync(candles_1d):
+    import pandas as pd
+    if not candles_1d or len(candles_1d) < 14:
+        return []
+    
+    df_daily = pd.DataFrame(candles_1d).iloc[:, :6]
+    df_daily.columns = ["timestamp", "volume", "close", "high", "low", "open"]
+    df_daily[["open", "high", "low", "close", "volume"]] = df_daily[["open", "high", "low", "close", "volume"]].apply(pd.to_numeric, errors='coerce')
+    df_daily['datetime'] = pd.to_datetime(df_daily['timestamp'].astype(float), unit='s')
+    df_daily.set_index('datetime', inplace=True)
+    
+    weekly_df = df_daily.resample('W-MON').agg({
+        'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum', 'timestamp': 'first'
+    }).dropna()
+    
+    return weekly_df.values.tolist()
+
 @dp.message(F.text.startswith("/ins_"))
 async def institutional_deep_scan(m: types.Message):
     # 1. 🛡️ حماية الغرفة المغلقة (لإدارة الصندوق فقط)
@@ -5160,80 +5179,107 @@ async def institutional_deep_scan(m: types.Message):
     
     loading_text = (
         f"📡 <i>Initiating Apex Quant Scan for #{sym}...</i>\n"
-        f"<i>1️⃣ Synchronizing Microstructure & Macro Flows...</i>\n"
-        f"<i>2️⃣ Engaging XGBoost (Classic) & MoE (Deep) Neural Nets...</i>\n"
+        f"<i>1️⃣ Synchronizing Microstructure & Macro Flows (Concurrent Fetch)...</i>\n"
+        f"<i>2️⃣ Engaging XGBoost & MoE Neural Nets (Dynamic Ensembling)...</i>\n"
         f"<i>3️⃣ Fusing Predictive Matrices...</i> 🧠"
     )
     processing_msg = await m.answer(loading_text, parse_mode=ParseMode.HTML)
 
     try:
         pool = dp['db_pool']
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=15) as client:
             await binance_rate_limit_event.wait()
             
             # ==========================================================
-            # 🌐 1. تجميع البيانات الفائقة (Data Harvesting)
+            # 🌐 1. تجميع البيانات التأسيسية (Concurrent Infrastructure Fetching)
             # ==========================================================
-            market_regime = await detect_market_regime(client)
+            regime_task = detect_market_regime(client)
+            candles_15m_task = get_candles_binance(pair, "15m", limit=750)
+            candles_1d_task = get_candles_binance(pair, "1d", limit=40)
             
-            # جلب الشموع الأساسية
-            candles_15m, candles_1d = await asyncio.gather(
-                get_candles_binance(pair, "15m", limit=750),
-                get_candles_binance(pair, "1d", limit=40),
-                return_exceptions=True
+            market_regime, candles_15m, candles_1d = await asyncio.gather(
+                regime_task, candles_15m_task, candles_1d_task, return_exceptions=True
             )
             
+            # 🛡️ الفيتو الصارم (Data Integrity Veto): رفض الاستمرار إذا فشل جلب البنية التحتية
             if isinstance(candles_15m, Exception) or not candles_15m:
-                return await processing_msg.edit_text(f"⚠️ <b>لا توجد سيولة كافية لعملة {sym} على بايننس حالياً.</b>", parse_mode=ParseMode.HTML)
-            if isinstance(candles_1d, Exception): candles_1d = []
+                return await processing_msg.edit_text(f"⚠️ <b>Market Data Unavailable:</b> لا توجد سيولة كافية لعملة {sym} على بايننس حالياً.", parse_mode=ParseMode.HTML)
+            if isinstance(candles_1d, Exception) or not candles_1d:
+                candles_1d = []
 
-            # معالجة الشموع واستخراج المؤشرات
+            # ==========================================================
+            # ⏱️ 2. هندسة التزامن السعري (Micro-Synchronization Reference)
+            # ==========================================================
+            # إجراء عمليات Pandas في الخلفية لمنع خنق الـ Event Loop
             df, last_rsi, current_adx, current_z, vol_mean, vol_std = await asyncio.to_thread(process_dataframe_sync, candles_15m)
-            price = float(df["close"].iloc[-1])
-            old_price_val = float(df["close"].iloc[-3]) if len(df) > 3 else price
+            candles_1w_simulated = await asyncio.to_thread(prepare_macro_candles_sync, candles_1d)
             
-            # محاكاة الشموع الأسبوعية لبيانات الماكرو
-            candles_1w_simulated = []
-            if candles_1d and len(candles_1d) >= 14:
-                df_daily = pd.DataFrame(candles_1d).iloc[:, :6]
-                df_daily.columns = ["timestamp", "volume", "close", "high", "low", "open"]
-                df_daily[["open", "high", "low", "close", "volume"]] = df_daily[["open", "high", "low", "close", "volume"]].apply(pd.to_numeric, errors='coerce')
-                df_daily['datetime'] = pd.to_datetime(df_daily['timestamp'].astype(float), unit='s')
-                df_daily.set_index('datetime', inplace=True)
-                weekly_df = df_daily.resample('W-MON').agg({'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum', 'timestamp': 'first'}).dropna()
-                candles_1w_simulated = weekly_df.values.tolist()
+            # 🎯 أخذ لقطة للسعر (Snapshot) وتمريرها لكل الدوال لضمان عدم وجود تسرب زمني (Arbitrage Gaps)
+            ref_price = float(df["close"].iloc[-1])
+            old_ref_price = float(df["close"].iloc[-3]) if len(df) > 3 else ref_price
+            
+            # ==========================================================
+            # ⚡ 3. الإطلاق المتزامن للمحركات العميقة (Concurrent Quant Execution)
+            # ==========================================================
+            # بدلاً من الانتظار التسلسلي (Sequential Awaiting)، نرسل كل الطلبات للبورصة في نفس اللحظة
+            tasks = [
+                asyncio.to_thread(calculate_macro_htf_features, candles_1d, candles_1w_simulated),
+                get_micro_cvd_absorption(pair, client, "15m"),
+                analyze_orderbook_spoofing_instant(sym, client, ref_price),
+                get_institutional_orderflow(pair, client),
+                get_futures_liquidity(sym, client, ref_price, old_ref_price),
+                get_whale_inflow_score()
+            ]
+            
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # 🛡️ استخراج البيانات مع الحماية من أعطال الـ API (Fail-Safes)
+            macro_features = results[0] if not isinstance(results[0], Exception) else (0.0, 0.0, 0.0, 0.0)
+            w_void, m_z30, htf_accum, days_exp = macro_features
+            
+            cvd_data = results[1] if not isinstance(results[1], Exception) else (0.0, None, 0.0)
+            cvd_boost, cvd_sig, cvd_trend = cvd_data
+            
+            depth_data = results[2] if not isinstance(results[2], Exception) else {"imbalance": 0.0, "bid_pressure_ratio": 1.0}
+            
+            flow_data = results[3] if not isinstance(results[3], Exception) else (0.0, 0.0, 0.0, None)
+            tick_delta, tick_buy, tick_sell, limit_abs = flow_data
+            
+            futures_data = results[4] if not isinstance(results[4], Exception) else (0.0, None, 0.0, 0.0, 0.0)
+            _, fut_sig, funding_val, oi_change, _ = futures_data
+            
+            whale_inflow = results[5] if not isinstance(results[5], Exception) else 1.0
 
-            # جلب البيانات المؤسساتية المعقدة
-            w_void, m_z30, htf_accum, days_exp = await asyncio.to_thread(calculate_macro_htf_features, candles_1d, candles_1w_simulated)
-            cvd_boost, cvd_sig, cvd_trend = await get_micro_cvd_absorption(pair, client, "15m")
-            depth_data = await analyze_orderbook_spoofing_instant(sym, client, price)
-            tick_delta, tick_buy, tick_sell, limit_abs = await get_institutional_orderflow(pair, client)
-            _, fut_sig, funding_val, _, _ = await get_futures_liquidity(sym, client, price, old_price_val)
-            
+            # 🛡️ إعدام الإشارة إذا فقدنا بيانات حيوية (Garbage In, Garbage Out Protection)
+            if cvd_trend == 0.0 and tick_delta == 0.0 and funding_val == 0.0:
+                return await processing_msg.edit_text("⚠️ <b>Data Integrity Compromised:</b> فشل الاتصال بمزودي السيولة (API Fail). تم إيقاف التحليل لحماية الصندوق.", parse_mode=ParseMode.HTML)
+
+            # ==========================================================
+            # 🧠 4. هندسة المدخلات للذكاء الاصطناعي (Feature Engineering)
+            # ==========================================================
             avg_vol_20 = df["volume"].tail(20).mean()
-            avg_vol_usd = avg_vol_20 * price if avg_vol_20 > 0 else 1.0
-            cvd_ratio_pct = (cvd_trend * price / avg_vol_usd) * 100 if avg_vol_usd > 0 else 0.0
+            avg_vol_usd = avg_vol_20 * ref_price if avg_vol_20 > 0 else 1.0
+            cvd_ratio_pct = (cvd_trend * ref_price / avg_vol_usd) * 100 if avg_vol_usd > 0 else 0.0
             
             ema200_val = df["close"].ewm(span=200).mean().iloc[-1] if len(df) >= 200 else df["close"].ewm(span=50).mean().iloc[-1]
-            cvd_divergence = 1.0 if (price > ema200_val and cvd_trend < 0) else -1.0 if (price < ema200_val and cvd_trend > 0) else 0.0
-            micro_volatility = df['close'].tail(20).pct_change().std() * 100
+            cvd_divergence = 1.0 if (ref_price > ema200_val and cvd_trend < 0) else -1.0 if (ref_price < ema200_val and cvd_trend > 0) else 0.0
+            micro_volatility = float(df['close'].tail(20).pct_change().std() * 100) if len(df) > 20 else 0.0
 
-            # ==========================================================
-            # 🧠 2. هندسة المدخلات للذكاء الاصطناعي (Feature Engineering)
-            # ==========================================================
             regime_map = {"Trending_Bull": 1, "Trending_Bear": 2, "Ranging": 3}
+            safe_market_regime = market_regime if not isinstance(market_regime, Exception) else {'trend': 'Unknown'}
+
             ml_features = {
-                'market_regime': regime_map.get(market_regime.get('trend', 'Unknown'), 0),
+                'market_regime': regime_map.get(safe_market_regime.get('trend', 'Unknown'), 0),
                 'sp500_trend': float(MACRO_CACHE.get("sp500_trend", 0.0)),
                 'sentiment_score': float(MACRO_CACHE.get("sentiment_score", 50.0)),
                 'z_score': float(current_z),
                 'cvd_to_vol_ratio': float(cvd_ratio_pct),
                 'ofi_imbalance': float(depth_data.get('imbalance', 0.0)),
                 'ob_skewness': float(depth_data.get('bid_pressure_ratio', 1.0)),
-                'whale_inflow': await get_whale_inflow_score(),
+                'whale_inflow': float(whale_inflow),
                 'adx': float(current_adx),
                 'rsi': float(last_rsi),
-                'micro_volatility': float(micro_volatility) if not pd.isna(micro_volatility) else 0.0,
+                'micro_volatility': micro_volatility,
                 'cvd_divergence': float(cvd_divergence),
                 'funding_rate': float(funding_val),
                 'weekly_liquidity_void': float(w_void),
@@ -5243,30 +5289,47 @@ async def institutional_deep_scan(m: types.Message):
             }
 
             # ==========================================================
-            # 🤖 3. الإعدام الثنائي بالذكاء الاصطناعي (Dual-AI Inference)
+            # 🤖 5. الإعدام الثنائي بالذكاء الاصطناعي (Concurrent Dual-AI Inference)
             # ==========================================================
-            # العقل الكلاسيكي (XGBoost)
-            xgb_conf, xgb_drop, xgb_time, xgb_pump = await asyncio.to_thread(predict_signal_sync, ml_features)
+            ai_tasks = [
+                asyncio.to_thread(predict_signal_sync, ml_features),
+                asyncio.to_thread(predict_deep_moe, ml_features)
+            ]
+            ai_results = await asyncio.gather(*ai_tasks, return_exceptions=True)
             
-            # العقل العميق (ONNX Mixture of Experts)
-            moe_conf, moe_drop, moe_time, moe_pump = await asyncio.to_thread(predict_deep_moe, ml_features)
+            xgb_res = ai_results[0] if not isinstance(ai_results[0], Exception) else (-1.0, 0.0, 0.0, 0.0)
+            moe_res = ai_results[1] if not isinstance(ai_results[1], Exception) else (-1.0, 0.0, 0.0, 0.0)
+            
+            xgb_conf, xgb_drop, xgb_time, xgb_pump = xgb_res
+            moe_conf, moe_drop, moe_time, moe_pump = moe_res
 
-            # معالجة النتائج وإسقاط الأهداف
             if xgb_conf == -1.0 and moe_conf == -1.0:
-                return await processing_msg.edit_text("⚠️ <b>النظام الذكي غير متاح حالياً. يرجى التأكد من تحميل النماذج.</b>", parse_mode=ParseMode.HTML)
+                return await processing_msg.edit_text("⚠️ <b>AI Engines Offline:</b> النظام الذكي غير متاح حالياً. يرجى التأكد من تحميل النماذج والأوزان.", parse_mode=ParseMode.HTML)
 
-            # حساب الثقة المدمجة (Weighted Ensemble Confidence)
-            # إعطاء وزن 60% للنموذج العميق و 40% للكلاسيكي
-            valid_confs = [c for c in [xgb_conf, moe_conf] if c != -1.0]
-            if len(valid_confs) == 2:
-                final_confidence = (moe_conf * 0.6) + (xgb_conf * 0.4)
+            # ==========================================================
+            # ⚖️ 6. محرك الأوزان الديناميكي (Dynamic AI Ensembling)
+            # ==========================================================
+            # لا نستخدم أرقاماً ثابتة (Hardcoded Weights). 
+            # في الأسواق المتذبذبة، نعطي وزناً أكبر للـ MoE، وفي الأسواق المستقرة/الترند، نميل للـ XGBoost.
+            if xgb_conf != -1.0 and moe_conf != -1.0:
+                # إذا كان التذبذب الميكروي (Micro Volatility) أعلى من 3%، نثق أكثر في الـ Deep Learning
+                if micro_volatility > 3.0:
+                    moe_weight, xgb_weight = 0.65, 0.35
+                else:
+                    moe_weight, xgb_weight = 0.40, 0.60
+                    
+                final_confidence = (moe_conf * moe_weight) + (xgb_conf * xgb_weight)
             else:
-                final_confidence = valid_confs[0]
+                final_confidence = moe_conf if moe_conf != -1.0 else xgb_conf
 
-            # تحديد الاتجاه بناءً على العائد المتوقع
-            avg_pump = (xgb_pump + moe_pump) / 2 if moe_pump != 0 else xgb_pump
-            avg_drop = (xgb_drop + moe_drop) / 2 if moe_drop != 0 else xgb_drop
+            # 🧲 هندسة النطاقات وإسقاط الأهداف (Target Projection)
+            valid_pumps = [p for p in [xgb_pump, moe_pump] if p > 0]
+            valid_drops = [d for d in [xgb_drop, moe_drop] if d > 0]
             
+            avg_pump = sum(valid_pumps) / len(valid_pumps) if valid_pumps else 0.0
+            avg_drop = sum(valid_drops) / len(valid_drops) if valid_drops else 0.0
+            
+            # تحديد الاتجاه بناءً على العائد المعدل بالمخاطرة (Risk-Adjusted Expectancy)
             if avg_pump > (avg_drop * 1.5):
                 direction = "صعود هجومي (Aggressive Markup) 🚀"
                 bias_color = "🟢"
@@ -5277,33 +5340,33 @@ async def institutional_deep_scan(m: types.Message):
                 direction = "تجميع/تذبذب (Accumulation/Chop) ⚖️"
                 bias_color = "🟡"
 
-            # 🧲 صياغة النطاقات (Range Geometry)
-            min_target_pct = min(xgb_pump, moe_pump) if moe_pump != 0 else xgb_pump
-            max_target_pct = max(xgb_pump, moe_pump) if moe_pump != 0 else xgb_pump
-            
-            min_target_price = price * (1 + (min_target_pct / 100))
-            max_target_price = price * (1 + (max_target_pct / 100))
+            min_target_pct = min(valid_pumps) if valid_pumps else 0.0
+            max_target_pct = max(valid_pumps) if valid_pumps else 0.0
+            min_target_price = ref_price * (1 + (min_target_pct / 100))
+            max_target_price = ref_price * (1 + (max_target_pct / 100))
 
-            min_drop_pct = min(xgb_drop, moe_drop) if moe_drop != 0 else xgb_drop
-            max_drop_pct = max(xgb_drop, moe_drop) if moe_drop != 0 else xgb_drop
-            
-            min_entry_price = price * (1 - (max_drop_pct / 100))
-            max_entry_price = price * (1 - (min_drop_pct / 100))
+            min_drop_pct = min(valid_drops) if valid_drops else 0.0
+            max_drop_pct = max(valid_drops) if valid_drops else 0.0
+            min_entry_price = ref_price * (1 - (max_drop_pct / 100))
+            max_entry_price = ref_price * (1 - (min_drop_pct / 100))
+
+            valid_times = [t for t in [xgb_time, moe_time] if t > 0]
+            time_str = f"{min(valid_times):.1f} - {max(valid_times):.1f}" if len(valid_times) > 1 else f"{valid_times[0]:.1f}"
 
             # ==========================================================
-            # 📊 4. التقرير المؤسساتي (Wall Street Terminal Output)
+            # 📊 7. التقرير المؤسساتي (Wall Street Terminal Output)
             # ==========================================================
             report = f"""
 🏛 <b>APEX QUANT TERMINAL | فحص الأصول العميق</b> 🏛
 ━━━━━━━━━━━━━━━━━━
 💎 <b>الأصل:</b> #{sym}
-💵 <b>السعر اللحظي:</b> <code>${format_price(price)}</code>
+💵 <b>السعر اللحظي المرجعي:</b> <code>${format_price(ref_price)}</code>
 {bias_color} <b>الاتجاه المتوقع:</b> {direction}
 
-🧠 <b>إجماع الذكاء الاصطناعي (AI Ensemble Consensus):</b>
-• <b>درجة الثقة النهائية:</b> <b>{final_confidence:.1f}%</b>
-• <b>الكلاسيكي (XGB):</b> ثقة {xgb_conf:.1f}%
-• <b>العميق (MoE):</b> ثقة {moe_conf:.1f}%
+🧠 <b>إجماع الذكاء الاصطناعي (Dynamic AI Ensemble):</b>
+• <b>درجة الثقة المرجحة:</b> <b>{final_confidence:.1f}%</b>
+• <b>الكلاسيكي (XGB):</b> ثقة {xgb_conf if xgb_conf != -1.0 else 'N/A'}%
+• <b>العميق (MoE):</b> ثقة {moe_conf if moe_conf != -1.0 else 'N/A'}%
 
 🎯 <b>أهداف الانفجار (Target Price Band):</b>
 • <b>من:</b> <code>${format_price(min_target_price)}</code> (+{min_target_pct:.1f}%)
@@ -5313,21 +5376,22 @@ async def institutional_deep_scan(m: types.Message):
 • <b>من:</b> <code>${format_price(min_entry_price)}</code> (-{max_drop_pct:.1f}%)
 • <b>إلى:</b> <code>${format_price(max_entry_price)}</code> (-{min_drop_pct:.1f}%)
 
-⏱️ <b>النافذة الزمنية المتوقعة للحركة:</b> <code>{min(xgb_time, moe_time):.1f} - {max(xgb_time, moe_time):.1f} ساعة</code>
+⏱️ <b>النافذة الزمنية المتوقعة للحركة:</b> <code>{time_str} ساعة</code>
 
-🔬 <b>المحركات الخلفية (Microstructure Flow):</b>
+🔬 <b>المحركات الخلفية (Microstructure Flow Snapshot):</b>
 • <b>شذوذ السيولة (Z-Score):</b> <code>{current_z:.2f}σ</code>
 • <b>تدفق المشتقات (Funding):</b> <code>{funding_val:.4f}</code>
 • <b>ضغط الأوردر بوك (OB Skew):</b> <code>{depth_data.get('bid_pressure_ratio', 1.0):.2f}x</code>
+• <b>تذبذب الميكرو (Volatility):</b> <code>{micro_volatility:.1f}%</code>
 ━━━━━━━━━━━━━━━━━━
-<i>* مُولد حصرياً لمدراء صناديق التحوط (Tier-1).</i>
+<i>* مُولد حصرياً لمدراء صناديق التحوط (Tier-1 - Synchronized Execution).</i>
 """
             await processing_msg.edit_text(report, parse_mode=ParseMode.HTML)
 
     except Exception as e:
         import traceback
         print(f"⚠️ [Apex Scan Error]: {traceback.format_exc()}")
-        await processing_msg.edit_text(f"⚠️ <b>حدث خطأ أثناء الفحص العميق:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
+        await processing_msg.edit_text(f"⚠️ <b>Execution Halted (Critical Error):</b>\n<code>{str(e)}</code>\n<i>النظام التقط خطأ غير متوقع وقام بتعليق التنفيذ لحماية الصندوق.</i>", parse_mode=ParseMode.HTML)
 
 # 1. أمر طلب الـ ID
 @dp.message(Command("manage"))
