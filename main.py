@@ -3624,17 +3624,15 @@ async def analyze_radar_coin(c, client, market_regime, sem):
             ob_base = quant_sigmoid_score(imbalance, sensitivity=4.0, limit=100.0)
             global_ob_bonus = min(20.0, math.log1p(max(0, global_ob_pressure - 1.0)) * 10.0)
             timing_score = min(100.0, ob_base + global_ob_bonus)
-            
-            # 🧠 التعامل الذكي مع التلاعب (Smart Spoofing Logic)
+            # 🧠 التعامل الذكي مع التلاعب لصفقات السوينغ (Swing-Adjusted Spoofing Logic)
+            # صناع السوق يتلاعبون بالدفتر اللحظي، لكن الترند الأكبر يغلب دائماً
             if is_hollow_flag:
-                timing_score *= 0.4 # عقاب صارم لفراغ السيولة (خطر الانزلاق)
+                timing_score *= 0.85 # خصم 15% فقط (خطر انزلاق طفيف، لكن الترند سيصححه)
             elif is_spoofed_flag:
-                # إذا كان التلاعب يدعم الاتجاه (تجميع صانع سوق)، العقاب خفيف
                 if (imbalance > 0.1 and current_regime_trend == "Trending_Bull") or (imbalance < -0.1 and current_regime_trend == "Trending_Bear"):
-                    timing_score *= 0.8 
+                    timing_score *= 0.95 # خصم 5% فقط (صانع السوق يجمع معنا)
                 else:
-                    # تلاعب عكس الاتجاه (فخ سيولة حقيقي)
-                    timing_score *= 0.3 
+                    timing_score *= 0.75 # خصم 25% (تلاعب عكسي، لكن لا يقتل الصفقة الكلية)
 
             # --- البُعد الثالث: الفوليوم كبوابة حتمية (The Pure Volume Gatekeeper) ---
             # 🛡️ الحفاظ على نزاهة Z-Score وعدم تلوثه بأي إضافات
@@ -3790,14 +3788,13 @@ async def analyze_radar_coin(c, client, market_regime, sem):
             # 🛡️ الفيتو الناعم المتكيف (Adaptive Soft Penalties)
             # ==========================================
             veto_tolerance = 1.3 if is_incubated else 1.0 
-            
-            # 🛑 فلتر VPIN: ضجيج الأفراد
+            # 🛑 فلتر VPIN: ضجيج الأفراد المعدل للسوينغ
             if vpin_score < 0.25 and micro_cvd_trend > 0:
                 tags.append("VPIN_Retail_Noise_Trap")
-                toxicity_score += 25.0
+                toxicity_score += 10.0 # تخفيف العقاب، الأفراد ليسوا دائماً مخطئين في بدايات الترند
             elif vpin_score > 0.65:
                 tags.append("VPIN_Toxic_Inflow")
-                toxicity_score = max(0.0, toxicity_score - 10.0) 
+                toxicity_score = max(0.0, toxicity_score - 15.0) # مكافأة أعلى لتدفق الحيتان
 
             # انحراف VWAP
             if current_vwap_z > (dyn_vwap_z * veto_tolerance):
@@ -3811,17 +3808,22 @@ async def analyze_radar_coin(c, client, market_regime, sem):
             if global_ob_pressure > dyn_ob_req and current_cvd < 0:
                 tags.append("Spoofing_Distribution_Trap")
                 toxicity_score += 20.0 
-
             # ==========================================================
-            # 🛑 جدار الإعدام المؤسساتي (The Ultimate Sieve)
+            # 🛑 جدار الإعدام المؤسساتي المرن (Adaptive Soft-Veto Sieve)
             # ==========================================================
-            # رفع سقف السماحية للعملات المشتعلة (KINETIC) لأنها بطبيعتها تحمل ضجيجاً أعلى
-            base_toxicity_limit = 85.0 if c.get("route") == "KINETIC" else 75.0
-            max_allowed_toxicity = base_toxicity_limit + 15.0 if is_incubated else base_toxicity_limit
+            # رفعنا عتبة الإعدام بشكل كبير لعدم خنق فرص السوينغ العنيفة
+            base_toxicity_limit = 120.0 if c.get("route") == "KINETIC" else 110.0
+            max_allowed_toxicity = base_toxicity_limit + 20.0 if is_incubated else base_toxicity_limit
             
             if toxicity_score > max_allowed_toxicity:
-                print(f"🗑️ {symbol} - تم الاستبعاد (Toxicity: {toxicity_score:.1f}/{max_allowed_toxicity} | Route: {c.get('route', 'STEALTH')})")
+                # إعدام الفرصة فقط إذا كانت عبارة عن فخ تصفية مؤكد
+                print(f"🗑️ {symbol} - استبعاد قطعي (Toxic: {toxicity_score:.1f} | Route: {c.get('route', 'STEALTH')})")
                 return None 
+            elif toxicity_score > 70.0:
+                # الفرصة تحمل مخاطرة/ضجيج، لن نقتلها، لكن سنخصم من قوتها الذاتية
+                # وندع الذكاء الاصطناعي يتخذ القرار النهائي
+                print(f"⚠️ {symbol} - تحذير سمية (Toxic: {toxicity_score:.1f}). تمريرها للـ AI مع خصم جودة.")
+                timing_score *= (1.0 - ((toxicity_score - 70.0) / 100.0))
 
 
 
@@ -4619,10 +4621,17 @@ async def check_btc_gravity_veto(client: httpx.AsyncClient):
             # حساب نسبة الهبوط اللحظية
             drop_pct = (current_close - prev_close) / prev_close
             candle_drop = (current_close - current_open) / current_open
+            # 🧠 التعديل الكمّي: التمييز بين (ضرب الستوبات) و (الانهيار الحقيقي)
+            # لا نفعل الفيتو إلا إذا تجاوز الهبوط 0.6% وترافق مع صعود مرعب في VIX
+            vix_spike = MACRO_CACHE.get("vix_trend_pct", 0.0) > 8.0 
             
-            # إذا هبط البيتكوين أكثر من 0.4% في 5 دقائق، هذا نزيف حاد (Flash Drop)
-            if drop_pct < -0.2 or candle_drop < -0.2:
-                return True # تفعيل الفيتو (خطر)
+            if (drop_pct < -0.6 or candle_drop < -0.6):
+                if vix_spike:
+                    print(f"🛑 [Macro Panic] هبوط عنيف للبيتكوين ({drop_pct*100:.2f}%) مع صعود VIX! تجميد الرادار.")
+                    return True # تفعيل الفيتو (خطر حقيقي)
+                else:
+                    print(f"🧲 [Liquidity Hunt] هبوط سريع للبيتكوين ({drop_pct*100:.2f}%) بدون ذعر ماكرو. فرصة صيد قيعان (Dip Buy)!")
+                    return False # مجرد ضرب ستوبات، استمر في البحث!
     except Exception as e:
         pass
     return False # الوضع آمن
