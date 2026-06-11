@@ -25,6 +25,7 @@ BINANCE_BASES = [
     "https://binance-sain.mo-dahoh.workers.dev",
     "https://binance.mor-aghyad6.workers.dev",
     "https://binani.gsmyr800.workers.dev",
+    "https://orange-mountain-22d2.mor-aghyad3.workers.dev",
     "https://holy-king-a16d.moooody-18-18-18.workers.dev",
     "https://old-recipe-c34d.m-aldahooh.workers.dev",
     "https://steep-art-7164.dahoohh1.workers.dev",
@@ -35,64 +36,98 @@ _original_httpx_get = httpx.AsyncClient.get
 
 # 2. نصنع دالة "الفلتر الذكي"
 # 2. الفلتر الذكي النهائي (Tier-1 Split-Router)
+import time
+import asyncio
+import random
+import httpx
+from urllib.parse import urlparse, urlunparse
+
+# 🚀 ذاكرة حجر صحي منفصلة: بايننس تفصل بين حظر السبوت والفيوتشرز!
+QUARANTINED_SPOT = {}
+QUARANTINED_FUTURES = {}
+
 async def _patched_binance_get(self, url, *args, **kwargs):
     url_str = str(url)
     parsed_url = urlparse(url_str)
     
-    # 📝 [اللوغ] طباعة الطلب الأصلي قبل أي تعديل
-    # print(f"🔄 [Network] اعتراض طلب GET موجه إلى: {parsed_url.netloc}{parsed_url.path}")
-
-    # 🛑 فلتر الأمان 1: إذا الطلب لـ Bybit، أو منصات أخرى، مشّيه فوراً
+    # 🛑 تمرير الطلبات الخارجية مباشرة
     if "binance" not in parsed_url.netloc and "workers.dev" not in parsed_url.netloc:
-        print(f"⏩ [Network] تمرير طلب خارجي مباشرة إلى: {parsed_url.netloc}")
         return await _original_httpx_get(self, url, *args, **kwargs)
 
-    # 🟢 المعالجة الذكية لطلبات Binance Spot:
-    bases = BINANCE_BASES.copy()
-    random.shuffle(bases) # توزيع الحمل العشوائي
+    # 🛡️ تحديد نوع المسار: هل هو سبوت أم فيوتشرز؟
+    is_futures = parsed_url.path.startswith(('/fapi', '/dapi', '/futures'))
+    
+    current_time = time.time()
+    
+    # 🟢 اختيار قائمة الحجر الصحي المناسبة للطلب الحالي
+    active_quarantine = QUARANTINED_FUTURES if is_futures else QUARANTINED_SPOT
+    
+    # فلترة السيرفرات المتاحة (استبعاد المحظورة في هذا المسار المحدد فقط)
+    available_bases = [b for b in BINANCE_BASES if b not in active_quarantine or current_time > active_quarantine.get(b, 0)]
+    
+    # التهدئة الذكية إذا حُظرت كل السيرفرات في هذا المسار
+    if not available_bases:
+        path_type = "الفيوتشرز" if is_futures else "السبوت"
+        print(f"🚨 [Tier-1 Warning] جميع السيرفرات محظورة من {path_type}! جاري التهدئة لمدة 30 ثانية...")
+        await asyncio.sleep(30)
+        available_bases = BINANCE_BASES.copy()
 
+    random.shuffle(available_bases)
     last_response = None
-    for base in bases:
+
+    for base in available_bases:
         try:
             base_parsed = urlparse(base)
             
-            # 🛠️ دمج الرابط الصحيح: نحافظ على المسار (path) والمتغيرات (query) كما هي تماماً!
+            # 🛠️ دمج الرابط الصحيح
             new_url = urlunparse((
                 base_parsed.scheme,
                 base_parsed.netloc,
                 parsed_url.path,
                 parsed_url.params,
-                parsed_url.query,  # 👈 هذا السطر يعيد (symbol=BTCUSDT) ويحل مشكلة 400
+                parsed_url.query, 
                 parsed_url.fragment
             ))
             
-            print(f"🔀 [Network] جاري محاولة الاتصال عبر: {new_url}")
-            print(f"DEBUG URL: {new_url}")
-            print(f"DEBUG PARAMS: {kwargs.get('params')}") 
             # إرسال الطلب
             res = await _original_httpx_get(self, new_url, *args, **kwargs)
             
+            # 🧠 المحرك الاستباقي: قراءة وزن الاستهلاك لبايننس وإبطاء البوت قبل الحظر
+            used_weight = int(res.headers.get("x-mbx-used-weight-1m", 0))
+            if used_weight > 2000:
+                print(f"⚠️ [Weight Alert] اقتربنا من الحد الأقصى (الوزن: {used_weight})... إبطاء فوري.")
+                await asyncio.sleep(1.5)
+            
             if res.status_code == 200:
-                print(f"✅ [Network] نجاح الاتصال! (الرد: 200) من السيرفر: {base_parsed.netloc}")
                 return res
                 
-            print(f"⚠️ [Network] السيرفر {base_parsed.netloc} رفض الطلب بخطأ {res.status_code}، جاري التبديل...")
-            last_response = res
+            # 🩸 عزل السيرفر في حال الحظر (429, 418) أو حظر الجدار الناري (403)
+            elif res.status_code in [429, 418, 403]:
+                path_type = "الفيوتشرز" if is_futures else "السبوت"
+                print(f"🩸 [Quarantine] السيرفر {base_parsed.netloc} أعاد {res.status_code} لمسار {path_type}. عزل لمدة 5 دقائق.")
+                
+                # إضافة السيرفر لقائمة الحجر الصحي المناسبة فقط (300 ثانية)
+                active_quarantine[base] = time.time() + 300
+                last_response = res
+                continue # الانتقال للسيرفر التالي
+                
+            else:
+                last_response = res
+                continue
             
         except Exception as e:
-            print(f"❌ [Network] خطأ انقطاع اتصال/شبكة في {base_parsed.netloc}: {str(e)}")
             continue
             
-    # 🚨 إذا وصلنا هنا، يعني أن جميع الروابط الـ 4 فشلت!
-    print(f"🚨 [Network-Critical] فشلت جميع سيرفرات Binance الأساسية في الاستجابة للمسار: {parsed_url.path}")
+    # 🚨 إذا وصلنا هنا، يعني أن جميع المحاولات فشلت
+    print(f"🚨 [Network-Critical] فشلت جميع المحاولات للمسار: {parsed_url.path}")
     
-    # 🛡️ جدار حماية أخير لمنع كراش البوت (AttributeError: 'NoneType' has no attribute 'status_code')
+    # 🛡️ جدار حماية أخير لمنع كراش البوت
     if last_response is None:
         print("🛡️ [Network] إرجاع استجابة وهمية (500) لمنع انهيار الرادار.")
-        # نعيد كائن استجابة وهمي يحتوي على كود 500 لكي تتخطاه دوال التحليل لديك بأمان
         return httpx.Response(500, request=httpx.Request("GET", url_str))
         
-    return last_response 
+    return last_response
+ 
 
 
 # 3. 💉 الحقن السحري: نستبدل دالة get في المكتبة بالدالة الذكية الخاصة بنا
@@ -2679,7 +2714,7 @@ async def silent_data_harvester_worker(pool):
                         pass # صمت تام عند الأخطاء لتستمر الحلقة
                     
                     # 🛡️ الجدار السري لحماية السيرفر: استراحة 50 ثانية بين كل عملة وعملة
-                    await asyncio.sleep(3) 
+                    await asyncio.sleep(50) 
                     
         except Exception as e:
             print(f"⚠️ Harvester Error: {e}")
@@ -8624,7 +8659,7 @@ async def on_startup(app):
     asyncio.create_task(macro_data_worker()) # 🌍 تشغيل عامل الماكرو
     asyncio.create_task(radar_worker_process(pool))
     asyncio.create_task(institutional_incubator_worker(pool))
-    asyncio.create_task(institutional_vanguard_worker())
+    #asyncio.create_task(institutional_vanguard_worker())
     asyncio.create_task(moe_hot_swap_worker())
     asyncio.create_task(ai_trainer_worker(pool)) # 🧠 تشغيل مدرب الذكاء الاصطناعي
     asyncio.create_task(ml_inspector_worker(pool)) # 🧠 تشغيل محقق الذكاء الاصطناعي
