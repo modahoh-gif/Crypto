@@ -2334,13 +2334,17 @@ def calculate_volume_zscore(df, window=720):
             current_z = float((log_vol.iloc[-1] - rolling_mean_log.iloc[-1]) / (rolling_std_log.iloc[-1] + 1e-8))
     else:
         # Fallback في حال عدم تمرير عمود timestamp
-        rolling_mean_log = log_vol.rolling(window=window, min_periods=100).mean()
-        rolling_std_log = log_vol.rolling(window=window, min_periods=100).std(ddof=0)
+        # 🟢 حماية مؤسساتية: ضمان أن min_periods لا يتجاوز حجم النافذة أبداً
+        safe_min_periods = min(100, window)
+
+        rolling_mean_log = log_vol.rolling(window=window, min_periods=safe_min_periods).mean()
+        rolling_std_log = log_vol.rolling(window=window, min_periods=safe_min_periods).std(ddof=0)
         current_z = float((log_vol.iloc[-1] - rolling_mean_log.iloc[-1]) / (rolling_std_log.iloc[-1] + 1e-8))
 
+    safe_min_periods = min(100, window)
     # حسابات توافقية للحفاظ على استقرار الكود القديم دون كسر الدوال الأخرى
-    last_median = float(df["volume"].rolling(window=window, min_periods=100).median().iloc[-1])
-    last_mad = float(df["volume"].rolling(window=window, min_periods=100).std().iloc[-1])
+    last_median = float(df["volume"].rolling(window=window, min_periods=safe_min_periods).median().iloc[-1])
+    last_mad = float(df["volume"].rolling(window=window, min_periods=safe_min_periods).std().iloc[-1])
     
     if pd.isna(current_z) or current_z == float('inf'):
         current_z = 0.0
