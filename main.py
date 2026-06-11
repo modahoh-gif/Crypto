@@ -4165,7 +4165,7 @@ async def apex_btc_tape_worker(pool):
                     float(up_dist_pct), float(dn_dist_pct), int(mag_code),
                     float(vol_z), float(rsi_15m), float(adx_15m),
                     float(vix_current),   # 🟢 الآن نسحبها بدقة متناهية من الدالة اللحظية
-                    float(vix_trend)))    # 🟢 بدلاً من الاعتماد على الذاكرة المؤقتة القديمة
+                    float(vix_trend))    # 🟢 بدلاً من الاعتماد على الذاكرة المؤقتة القديمة
                     
 
         except Exception as e:
