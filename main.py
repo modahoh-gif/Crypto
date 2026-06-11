@@ -50,25 +50,40 @@ async def _patched_binance_get(self, url, *args, **kwargs):
     url_str = str(url)
     parsed_url = urlparse(url_str)
     
-    # 🛑 تمرير الطلبات الخارجية مباشرة
-    if "binance" not in parsed_url.netloc and "workers.dev" not in parsed_url.netloc:
+    # 1. تمرير الطلبات الخارجية مباشرة (غير بايننس)
+    if "binance" not in parsed_url.netloc and "workers.dev" not in parsed_url.netloc and "tgcryptobot" not in parsed_url.netloc:
         return await _original_httpx_get(self, url, *args, **kwargs)
 
-    # 🛡️ تحديد نوع المسار: هل هو سبوت أم فيوتشرز؟
     is_futures = parsed_url.path.startswith(('/fapi', '/dapi', '/futures'))
     
+    # =================================================================
+    # 🛑 التعديل الجذري: إخراج الفيوتشرز من الووركرز لتجنب حظر 418 و 403
+    # =================================================================
+    if is_futures:
+        clean_url = url_str
+        # تنظيف الرابط من أي ووركر وإعادته لبايننس الأصلي
+        for base in BINANCE_BASES:
+            if base in clean_url:
+                clean_url = clean_url.replace(base, "https://fapi.binance.com")
+        
+        # التأكد من صحة النطاق للفيوتشرز
+        if "dapi" in parsed_url.path:
+            clean_url = clean_url.replace("api.binance.com", "dapi.binance.com").replace("fapi.binance.com", "dapi.binance.com")
+        else:
+            clean_url = clean_url.replace("api.binance.com", "fapi.binance.com")
+            
+        # إرسال طلب الفيوتشرز من سيرفر ريندر مباشرة (بدون كلاود فلير)
+        return await _original_httpx_get(self, clean_url, *args, **kwargs)
+    # =================================================================
+
+    # 2. مسار السبوت (Spot): يستمر في استخدام الووركرز لتوزيع الحمل بأمان
     current_time = time.time()
+    active_quarantine = QUARANTINED_SPOT
     
-    # 🟢 اختيار قائمة الحجر الصحي المناسبة للطلب الحالي
-    active_quarantine = QUARANTINED_FUTURES if is_futures else QUARANTINED_SPOT
-    
-    # فلترة السيرفرات المتاحة (استبعاد المحظورة في هذا المسار المحدد فقط)
     available_bases = [b for b in BINANCE_BASES if b not in active_quarantine or current_time > active_quarantine.get(b, 0)]
     
-    # التهدئة الذكية إذا حُظرت كل السيرفرات في هذا المسار
     if not available_bases:
-        path_type = "الفيوتشرز" if is_futures else "السبوت"
-        print(f"🚨 [Tier-1 Warning] جميع السيرفرات محظورة من {path_type}! جاري التهدئة لمدة 30 ثانية...")
+        print("🚨 [Tier-1 Warning] جميع الووركرز محظورة من السبوت! جاري التهدئة...")
         await asyncio.sleep(30)
         available_bases = BINANCE_BASES.copy()
 
@@ -78,8 +93,6 @@ async def _patched_binance_get(self, url, *args, **kwargs):
     for base in available_bases:
         try:
             base_parsed = urlparse(base)
-            
-            # 🛠️ دمج الرابط الصحيح
             new_url = urlunparse((
                 base_parsed.scheme,
                 base_parsed.netloc,
@@ -89,47 +102,30 @@ async def _patched_binance_get(self, url, *args, **kwargs):
                 parsed_url.fragment
             ))
             
-            # إرسال الطلب
             res = await _original_httpx_get(self, new_url, *args, **kwargs)
             
-            # 🧠 المحرك الاستباقي: قراءة وزن الاستهلاك لبايننس وإبطاء البوت قبل الحظر
             used_weight = int(res.headers.get("x-mbx-used-weight-1m", 0))
             if used_weight > 2000:
-                print(f"⚠️ [Weight Alert] اقتربنا من الحد الأقصى (الوزن: {used_weight})... إبطاء فوري.")
                 await asyncio.sleep(1.5)
             
             if res.status_code == 200:
                 return res
-                
-            # 🩸 عزل السيرفر في حال الحظر (429, 418) أو حظر الجدار الناري (403)
             elif res.status_code in [429, 418, 403]:
-                path_type = "الفيوتشرز" if is_futures else "السبوت"
-                print(f"🩸 [Quarantine] السيرفر {base_parsed.netloc} أعاد {res.status_code} لمسار {path_type}. عزل لمدة 5 دقائق.")
-                
-                # إضافة السيرفر لقائمة الحجر الصحي المناسبة فقط (300 ثانية)
+                print(f"🩸 [Quarantine] عزل الووركر {base_parsed.netloc} للسبوت.")
                 active_quarantine[base] = time.time() + 300
                 last_response = res
-                continue # الانتقال للسيرفر التالي
-                
+                continue
             else:
                 last_response = res
                 continue
-            
-        except Exception as e:
+                
+        except Exception:
             continue
             
-    # 🚨 إذا وصلنا هنا، يعني أن جميع المحاولات فشلت
-    print(f"🚨 [Network-Critical] فشلت جميع المحاولات للمسار: {parsed_url.path}")
-    
-    # 🛡️ جدار حماية أخير لمنع كراش البوت
     if last_response is None:
-        print("🛡️ [Network] إرجاع استجابة وهمية (500) لمنع انهيار الرادار.")
         return httpx.Response(500, request=httpx.Request("GET", url_str))
         
     return last_response
- 
-
-
 # 3. 💉 الحقن السحري: نستبدل دالة get في المكتبة بالدالة الذكية الخاصة بنا
 httpx.AsyncClient.get = _patched_binance_get
 
