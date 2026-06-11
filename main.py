@@ -56,56 +56,64 @@ async def _patched_binance_get(self, url, *args, **kwargs):
 
     is_futures = parsed_url.path.startswith(('/fapi', '/dapi', '/futures'))
     # =================================================================
-    # 🛑 التعديل المؤسساتي النهائي: إرسال الفيوتشرز عبر البروكسي مع تنظيف الهيدرز كلياً لمنع 403
+    # 🚀 التعديل المؤسساتي الذهبي: تمرير الفيوتشرز عبر الووركرز الذكية بأمان تام
     # =================================================================
     if is_futures:
-        clean_url = url_str
-        for base in BINANCE_BASES:
-            if base in clean_url:
-                clean_url = clean_url.replace(base, "https://fapi.binance.com")
+        current_time = time.time()
+        active_quarantine = QUARANTINED_SPOT
         
-        if "dapi" in parsed_url.path:
-            clean_url = clean_url.replace("api.binance.com", "dapi.binance.com").replace("fapi.binance.com", "dapi.binance.com")
-        else:
-            clean_url = clean_url.replace("api.binance.com", "fapi.binance.com")
-            
-        # 💉 إعداد بيانات البروكسي كـ HTTP/1.1 نظيف ومستقل
-        PROXY_URL = "http://gsmyr800:Koiwkvw9hB@212.68.184.110:50100"
+        # جلب الووركرز المتاحة وغير المحظورة
+        available_bases = [b for b in BINANCE_BASES if b not in active_quarantine or current_time > active_quarantine.get(b, 0)]
         
-        # هندسة هيدرز بشرية كاملة 100% لتمويه جدار الحماية
+        if not available_bases:
+            print("🚨 [Tier-1 Warning] جميع الووركرز تحت التهدئة، جاري الاستعانة بالقائمة الأصلية...")
+            available_bases = BINANCE_BASES.copy()
+
+        random.shuffle(available_bases)
+        last_response = None
+
+        # تمويه هيدرز بالبصمة البشرية الكاملة
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "application/json",
-            "Accept-Language": "en-US,en;q=0.9",
             "X-MBX-APIKEY": BINANCE_API_KEY
         }
 
-        # نظام الحماية المتتابع (3 محاولات)
-        for attempt in range(3):
+        for base in available_bases:
             try:
-                # 🧠 السحر هنا: نمنع httpx من تسريب هيدر Proxy-Authorization إلى بايننس
-                # ونعزل الـ Transport ليعمل بنظام HTTP/1.1 الصارم ليتوافق مع أجهزة Proxy-Seller
-                proxy = httpx.Proxy(url=PROXY_URL)
-                proxy_transport = httpx.AsyncHTTPTransport(proxy=proxy, verify=False, http1=True, http2=False)
+                base_parsed = urlparse(base)
+                # إعادة صياغة الرابط ليمر من خلال الووركر الذكي
+                new_url = urlunparse((
+                    base_parsed.scheme,
+                    base_parsed.netloc,
+                    parsed_url.path,
+                    parsed_url.params,
+                    parsed_url.query, 
+                    parsed_url.fragment
+                ))
                 
-                async with httpx.AsyncClient(transport=proxy_transport, timeout=12.0) as proxy_client:
-                    # نرسل الطلب مستخدمين الدالة الأصلية الخام لكسر التكرار اللانهائي
-                    res = await _original_httpx_get(proxy_client, clean_url, headers=headers, params=kwargs.get('params'))
+                # استخدام الدالة الأصلية الخام لمنع الـ Recursion والعبور مباشرة عبر الووركر
+                res = await _original_httpx_get(self, new_url, headers=headers, params=kwargs.get('params'))
+                
+                if res.status_code == 200:
+                    return res
+                elif res.status_code in [429, 418, 403, 302]:
+                    print(f"🩸 [Quarantine] عزل الووركر {base_parsed.netloc} للفيوتشرز بسبب الكود {res.status_code}.")
+                    active_quarantine[base] = time.time() + 300
+                    last_response = res
+                    continue
+                else:
+                    last_response = res
+                    continue
                     
-                    if res.status_code == 200:
-                        return res
-                    elif res.status_code in [403, 302]:
-                        print(f"⚠️ [Proxy Blocked] بايننس ردت بكود {res.status_code} عبر البروكسي. محاولة {attempt+1}")
-                        await asyncio.sleep(1.5)
-                        continue
-                    else:
-                        return res
             except Exception as e:
-                print(f"⚠️ [Proxy Network Error] فشل عبر البروكسي (محاولة {attempt+1}): {e}")
-                await asyncio.sleep(1.5)
-        
-        # خطة الطوارئ الأخيرة بالدالة الأصلية في حال تفحم البروكسي
-        return await _original_httpx_get(self, clean_url, *args, **kwargs)
+                print(f"⚠️ [Worker Error] فشل العبور من {base}: {e}")
+                continue
+                
+        if last_response is None:
+            return httpx.Response(500, request=httpx.Request("GET", url_str))
+            
+        return last_response
     # =================================================================
 
     # 2. مسار السبوت (Spot): يستمر في استخدام الووركرز لتوزيع الحمل بأمان
