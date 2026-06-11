@@ -1500,8 +1500,10 @@ async def detect_spot_perp_divergence(symbol: str, client: httpx.AsyncClient):
         
         if spot_res.status_code != 200 or fapi_res.status_code != 200: 
             if fapi_res.status_code != 200:
-                print(f"⚠️ [Binance FAPI Direct] {clean_sym} | رفض كود {fapi_res.status_code} في Spot-Perp Divergence")
+                redirect_url = fapi_res.headers.get('Location', 'بدون رابط توجيه')
+                print(f"⚠️ [Binance FAPI Direct] {clean_sym} | كود {fapi_res.status_code} | تم التوجيه إلى: {redirect_url}")
             return 0.0
+
 
         spot_df = pd.DataFrame(spot_res.json(), columns=["t","o","h","l","c","v","ct","qv","trades","tbv","tqav","ignore"])
         fapi_df = pd.DataFrame(fapi_res.json(), columns=["t","o","h","l","c","v","ct","qv","trades","tbv","tqav","ignore"])
