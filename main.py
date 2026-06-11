@@ -55,24 +55,49 @@ async def _patched_binance_get(self, url, *args, **kwargs):
         return await _original_httpx_get(self, url, *args, **kwargs)
 
     is_futures = parsed_url.path.startswith(('/fapi', '/dapi', '/futures'))
-    
     # =================================================================
-    # 🛑 التعديل الجذري: إخراج الفيوتشرز من الووركرز لتجنب حظر 418 و 403
+    # 🛑 التعديل الجذري: إرسال الفيوتشرز عبر بروكسي اليابان (ISP) لمنع 302
     # =================================================================
     if is_futures:
         clean_url = url_str
-        # تنظيف الرابط من أي ووركر وإعادته لبايننس الأصلي
         for base in BINANCE_BASES:
             if base in clean_url:
                 clean_url = clean_url.replace(base, "https://fapi.binance.com")
         
-        # التأكد من صحة النطاق للفيوتشرز
         if "dapi" in parsed_url.path:
             clean_url = clean_url.replace("api.binance.com", "dapi.binance.com").replace("fapi.binance.com", "dapi.binance.com")
         else:
             clean_url = clean_url.replace("api.binance.com", "fapi.binance.com")
             
-        # إرسال طلب الفيوتشرز من سيرفر ريندر مباشرة (بدون كلاود فلير)
+        # 💉 رابط البروكسي الياباني الخاص بك
+        PROXY_URL = "http://gsmyr800:Koiwkvw9hB@212.68.184.110:50100"
+        
+        # إضافة User-Agent مؤسساتي للتمويه
+        headers = kwargs.get("headers", {})
+        headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        kwargs["headers"] = headers
+
+        # نظام الحماية: 3 محاولات للاتصال لامتصاص أي تقطيع في الشبكة
+        for attempt in range(3):
+            try:
+                # نفتح الاتصال مع البروكسي ونتجاهل التحقق من شهادة SSL لتسريع الاتصال
+                async with httpx.AsyncClient(proxy=PROXY_URL, verify=False, timeout=10.0) as proxy_client:
+                    res = await proxy_client.get(clean_url, *args, **kwargs)
+                    
+                    # إذا نجح الاتصال ولم يرجع 302 نخرج من الدوامة
+                    if res.status_code == 200:
+                        return res
+                    elif res.status_code == 302:
+                        print(f"⚠️ [Proxy] بايننس حاولت التوجيه 302 عبر البروكسي. محاولة {attempt+1}")
+                        await asyncio.sleep(1)
+                        continue
+                    else:
+                        return res
+            except Exception as e:
+                print(f"⚠️ [Proxy Error] خطأ في اتصال الفيوتشرز (محاولة {attempt+1}): {e}")
+                await asyncio.sleep(1)
+        
+        # إذا فشل البروكسي تماماً (حالة نادرة)، نرسله بالطريقة القديمة كخطة طوارئ
         return await _original_httpx_get(self, clean_url, *args, **kwargs)
     # =================================================================
 
