@@ -3413,16 +3413,23 @@ async def analyze_radar_coin(c, client, market_regime, sem):
             avg_spread = (abs(df["high"] - df["low"]) / df["low"]).tail(5).mean() * 100
             safe_spread = max(candle_spread_pct, avg_spread, 0.15) 
             lar_score = current_z / safe_spread
-            
+            # 👈 استخراج مسار العملة من الرادار
+            route = c.get("route", "STEALTH")
+
             # ==========================================================
-            # 🛑 المرحلة الأولى: تراكم المخاطر الأساسية (Soft Penalty Accumulation)
+            # 🟢 المرحلة الأولى: جلب بيانات القيادة المؤسساتية (Spot vs Perp)
+            # ==========================================================
+            spot_lead_score = await detect_spot_perp_divergence(symbol, client)
+
+            # ==========================================================
+            # 🛑 المرحلة الثانية: تراكم المخاطر الديناميكي (Context-Aware Toxicity)
             # ==========================================================
             
-            # 🧬 1. فحص اقتصاديات التوكن (Tokenomics Exit-Liquidity Check)
+            # 🧬 1. فحص اقتصاديات التوكن
             tokenomics_risk = await evaluate_tokenomics_overhang(symbol, client)
             if tokenomics_risk['is_vetoed']:
                 tags.append(tokenomics_risk['tag'])
-                toxicity_score += 45.0 # عقاب شديد بدلاً من القتل
+                toxicity_score += 45.0 
             
             current_regime_trend = market_regime['trend'] if isinstance(market_regime, dict) else "Unknown"
             volatility_state = market_regime['volatility'] if isinstance(market_regime, dict) else "Normal"
@@ -3430,28 +3437,43 @@ async def analyze_radar_coin(c, client, market_regime, sem):
             z_threshold = 2.0 if volatility_state == "Low_Vol" else (3.0 if volatility_state == "High_Vol" else 2.5)
             lar_threshold = 0.6 if current_regime_trend == "Trending_Bull" else 0.8
 
-            # أ. الهروب من الفومو (Late FOMO Penalty):
-            if current_z > z_threshold and candle_spread_pct > 4.0:
-                tags.append("Late_FOMO_Pump")
-                toxicity_score += 30.0 
+            # 🧠 2. محرك التقييم المتعامد (فصل الزخم عن القيعان)
+            if route == "KINETIC":
+                # نحن في عملة تنفجر حالياً (صعود بين 3% و 25%)
+                if spot_lead_score >= 2.0:
+                    # السبوت يقود الصعود! هذا ليس فخاً، هذا دخول مؤسساتي عنيف
+                    tags.append("Kinetic_Institutional_Pump")
+                    toxicity_score = max(0.0, toxicity_score - 20.0) # تخفيف السمية تماماً
+                elif spot_lead_score < -3.0:
+                    # الفيوتشرز يقود الصعود والسبوت يبيع (Retail Fakeout)
+                    tags.append("Spot_Dumping_Fakeout")
+                    toxicity_score += 60.0 # إعدام فوري تقريباً
+                else:
+                    # صعود بالرافعة المالية بدون دعم سبوت حقيقي قوي
+                    if current_z > z_threshold and candle_spread_pct > 4.0:
+                        tags.append("Late_FOMO_Pump")
+                        toxicity_score += 30.0
+            
+            else: # مسار STEALTH (التجميع الصامت في القاع)
+                # أ. الهروب من الفومو في القيعان (Spike in a ranging market)
+                if current_z > z_threshold and candle_spread_pct > 4.0:
+                    tags.append("Late_FOMO_Pump")
+                    toxicity_score += 30.0 
 
-            # ب. فلتر العملات الميتة (Dead Asset Penalty):
-            if lar_score < lar_threshold and current_z < (z_threshold - 1.0):
-                tags.append("Dead_Asset_Risk")
-                toxicity_score += 40.0 
+                # ب. فلتر العملات الميتة (Dead Asset Penalty)
+                if lar_score < lar_threshold and current_z < (z_threshold - 1.0):
+                    tags.append("Dead_Asset_Risk")
+                    toxicity_score += 40.0 
 
-            # إضافة الـ Tag للعملات القوية وتخفيف السمية
+                if spot_lead_score < -3.0:
+                    tags.append("Spot_Dumping_Fakeout")
+                    toxicity_score += 35.0
+
+            # تعزيز إضافي للعملات ذات الامتصاص العالي للسيولة
             if lar_score >= 2.0 and current_z > 1.5:
                 tags.append("High_Liquidity_Absorption")
                 toxicity_score = max(0.0, toxicity_score - 15.0) 
-
-            # ==========================================================
-            # 🟢 المرحلة الثانية: فحص المشتقات وجلب البيانات المؤسساتية
-            # ==========================================================
-            spot_lead_score = await detect_spot_perp_divergence(symbol, client)
-            if spot_lead_score < -3.0:
-                tags.append("Spot_Dumping_Fakeout")
-                toxicity_score += 35.0 
+  
 
             old_price_val = df["close"].iloc[-3] if len(df) > 3 else df["open"].iloc[0]
             approx_24h_vol_usd = df["volume"].tail(24).sum() * price 
@@ -3793,11 +3815,14 @@ async def analyze_radar_coin(c, client, market_regime, sem):
             # ==========================================================
             # 🛑 جدار الإعدام المؤسساتي (The Ultimate Sieve)
             # ==========================================================
-            max_allowed_toxicity = 90.0 if is_incubated else 70.0
+            # رفع سقف السماحية للعملات المشتعلة (KINETIC) لأنها بطبيعتها تحمل ضجيجاً أعلى
+            base_toxicity_limit = 85.0 if c.get("route") == "KINETIC" else 75.0
+            max_allowed_toxicity = base_toxicity_limit + 15.0 if is_incubated else base_toxicity_limit
             
             if toxicity_score > max_allowed_toxicity:
-                print(f"🗑️ {symbol} - تم الاستبعاد: تراكمت مخاطر التلاعب والسيولة (Toxicity: {toxicity_score:.1f}/{max_allowed_toxicity}).")
+                print(f"🗑️ {symbol} - تم الاستبعاد (Toxicity: {toxicity_score:.1f}/{max_allowed_toxicity} | Route: {c.get('route', 'STEALTH')})")
                 return None 
+
 
 
             # ==========================================
@@ -4657,14 +4682,23 @@ async def ai_opportunity_radar(pool):
                     vol_usd = float(t["quoteVolume"])
                     price_change = float(t["priceChangePercent"])
                     
-                    # 🟢 الفلترة السحرية: 
-                    if vol_usd >= 400_000 and -25.0 <= price_change <= 5.0:
-                        coins.append({
-                            "symbol": clean_sym,
-                            "quote": {"USD": {"price": float(t["lastPrice"])}},
-                            "volume": vol_usd,
-                            "priceChangePercent": price_change # 👈 أضفنا هذا السطر لكي تتعرف عليه دالة الترتيب
-                        })
+                    # 🟢 الفلترة المؤسساتية (Stealth & Kinetic Routing): 
+                    if vol_usd >= 400_000:
+                        route = None
+                        if -20.0 <= price_change <= 3.0:
+                            route = "STEALTH" # مسار التجميع الصامت في القاع
+                        elif 3.0 < price_change <= 25.0:
+                            route = "KINETIC" # مسار الانفجار السعري (الزخم)
+                        
+                        if route:
+                            coins.append({
+                                "symbol": clean_sym,
+                                "quote": {"USD": {"price": float(t["lastPrice"])}},
+                                "volume": vol_usd,
+                                "priceChangePercent": price_change,
+                                "route": route # 👈 تمرير المسار للتحليل لمعرفة كيفية تقييمها
+                            })
+
                 
                 # الفرز بناءً على أضيق نسبة تغير في السعر (من الأقرب للصفر) لاصطياد العملات المضغوطة                # --- الكود القديم لديك ---
                 coins = sorted(coins, key=lambda x: float(x.get("volume", 0)), reverse=True)[:350]
