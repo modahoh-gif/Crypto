@@ -56,7 +56,7 @@ async def _patched_binance_get(self, url, *args, **kwargs):
 
     is_futures = parsed_url.path.startswith(('/fapi', '/dapi', '/futures'))
     # =================================================================
-    # 🛑 التعديل الجذري: إرسال الفيوتشرز عبر بروكسي اليابان (ISP) لمنع 302
+    # 🛑 التعديل الجذري الآمن: إرسال الفيوتشرز عبر البروكسي باستخدام الدالة الأصلية لمنع Recursion
     # =================================================================
     if is_futures:
         clean_url = url_str
@@ -80,11 +80,13 @@ async def _patched_binance_get(self, url, *args, **kwargs):
         # نظام الحماية: 3 محاولات للاتصال لامتصاص أي تقطيع في الشبكة
         for attempt in range(3):
             try:
-                # نفتح الاتصال مع البروكسي ونتجاهل التحقق من شهادة SSL لتسريع الاتصال
-                async with httpx.AsyncClient(proxy=PROXY_URL, verify=False, timeout=10.0) as proxy_client:
-                    res = await proxy_client.get(clean_url, *args, **kwargs)
+                # نفتح الاتصال مع البروكسي كـ Transport معزول تماماً لمنع التداخل مع الحقن السحري
+                proxy_transport = httpx.AsyncHTTPTransport(proxy=PROXY_URL, verify=False)
+                
+                async with httpx.AsyncClient(transport=proxy_transport, timeout=10.0) as proxy_client:
+                    # 🚀 التعديل الذهبي: استدعاء الدالة الأصلية الخام المحفوظة في كودك لكسر الـ Recursion
+                    res = await _original_httpx_get(proxy_client, clean_url, *args, **kwargs)
                     
-                    # إذا نجح الاتصال ولم يرجع 302 نخرج من الدوامة
                     if res.status_code == 200:
                         return res
                     elif res.status_code == 302:
@@ -97,7 +99,7 @@ async def _patched_binance_get(self, url, *args, **kwargs):
                 print(f"⚠️ [Proxy Error] خطأ في اتصال الفيوتشرز (محاولة {attempt+1}): {e}")
                 await asyncio.sleep(1)
         
-        # إذا فشل البروكسي تماماً (حالة نادرة)، نرسله بالطريقة القديمة كخطة طوارئ
+        # خطة الطوارئ الأخيرة بالدالة الأصلية
         return await _original_httpx_get(self, clean_url, *args, **kwargs)
     # =================================================================
 
@@ -8677,7 +8679,7 @@ async def on_startup(app):
     asyncio.create_task(apex_short_watchdog(pool))
     asyncio.create_task(short_radar_worker_process(pool))
     asyncio.create_task(smart_radar_watchdog(pool))
-    #asyncio.create_task(institutional_lob_worker(pool))
+    asyncio.create_task(institutional_lob_worker(pool))
     asyncio.create_task(silent_data_harvester_worker(pool))
     asyncio.create_task(macro_data_worker()) # 🌍 تشغيل عامل الماكرو
     asyncio.create_task(radar_worker_process(pool))
