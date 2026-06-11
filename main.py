@@ -4124,7 +4124,7 @@ async def apex_btc_tape_worker(pool):
                 _, _, _, premium_z, basis_z = live_data
                 _, _, _, _, funding_z = funding_data
                 cme_premium_pct, _, ibit_vol_surge, _ = ws_data
-                spy_trend, _, dxy_trend, _, us10y_trend, _ = macro_data
+                spy_trend, _, dxy_trend, _, us10y_trend, _, vix_current, vix_trend, _ = macro_data
 
                 # 3. هندسة المسافات لمجمعات السيولة (لجعلها قابلة للفهم للذكاء الاصطناعي)
                 up_dist_pct = 0.0
@@ -4164,8 +4164,9 @@ async def apex_btc_tape_worker(pool):
                     float(dxy_trend), float(us10y_trend), float(spy_trend),
                     float(up_dist_pct), float(dn_dist_pct), int(mag_code),
                     float(vol_z), float(rsi_15m), float(adx_15m),
-                    float(MACRO_CACHE.get("vix_value", 19.8)),      # 🟢 سحب القيمة من الذاكرة اللحظية
-                    float(MACRO_CACHE.get("vix_trend_pct", 0.0)))   # 🟢 سحب القيمة من الذاكرة اللحظية
+                    float(vix_current),   # 🟢 الآن نسحبها بدقة متناهية من الدالة اللحظية
+                    float(vix_trend)))    # 🟢 بدلاً من الاعتماد على الذاكرة المؤقتة القديمة
+                    
 
         except Exception as e:
             import traceback
@@ -5917,44 +5918,52 @@ async def get_isolated_macro_for_btc_report(client: httpx.AsyncClient):
     """
     [Isolated Macro Correlation Engine] 🌍
     دالة معزولة تعمل عند طلب /btc فقط. تسحب حالة الاقتصاد الكلي 
-    (الدولار، السندات، الأسهم) دون التأثير على رادارات الذكاء الاصطناعي الأساسية.
+    (الدولار، السندات، الأسهم، مؤشر الخوف) دون التأثير على رادارات الذكاء الاصطناعي الأساسية.
     """
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     try:
         spy_url = "https://query1.finance.yahoo.com/v8/finance/chart/SPY?interval=1d&range=5d"
         dxy_url = "https://query1.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=1d&range=5d"
         us10y_url = "https://query1.finance.yahoo.com/v8/finance/chart/^TNX?interval=1d&range=5d"
+        vix_url = "https://query1.finance.yahoo.com/v8/finance/chart/^VIX?interval=1d&range=5d" # 🟢 الإضافة المباشرة للـ VIX
 
-        res_spy, res_dxy, res_us10y = await asyncio.gather(
+        res_spy, res_dxy, res_us10y, res_vix = await asyncio.gather(
             client.get(spy_url, headers=headers, timeout=5.0),
             client.get(dxy_url, headers=headers, timeout=5.0),
             client.get(us10y_url, headers=headers, timeout=5.0),
+            client.get(vix_url, headers=headers, timeout=5.0), # 🟢 الجلب المتزامن
             return_exceptions=True
         )
 
-        def extract_trend(res):
+        def extract_trend_and_current(res):
             if not isinstance(res, Exception) and res.status_code == 200:
                 chart_data = res.json().get('chart', {}).get('result', [{}])[0]
                 closes = chart_data.get('indicators', {}).get('quote', [{}])[0].get('close', [])
                 valid_closes = [c for c in closes if c is not None]
                 if len(valid_closes) >= 2:
-                    return ((valid_closes[-1] - valid_closes[-2]) / valid_closes[-2]) * 100
-            return 0.0
+                    trend = ((valid_closes[-1] - valid_closes[-2]) / valid_closes[-2]) * 100
+                    return trend, valid_closes[-1] # إرجاع النسبة والسعر الحالي
+            return 0.0, 0.0
 
-        spy_trend = extract_trend(res_spy)
-        dxy_trend = extract_trend(res_dxy)
-        us10y_trend = extract_trend(res_us10y)
+        spy_trend, _ = extract_trend_and_current(res_spy)
+        dxy_trend, _ = extract_trend_and_current(res_dxy)
+        us10y_trend, _ = extract_trend_and_current(res_us10y)
+        vix_trend, vix_current = extract_trend_and_current(res_vix) # 🟢 استخراج قيم الـ VIX
         
-        # تحليل التأثير على البيتكوين (عكسي مع الدولار والسندات، طردي مع الأسهم)
+        # تحليل التأثير على البيتكوين
         dxy_impact = "🔴 ضغط سلبي" if dxy_trend > 0.15 else ("🟢 داعم للسيولة" if dxy_trend < -0.15 else "⚪ حيادي")
         us10y_impact = "🔴 يسحب السيولة" if us10y_trend > 1.0 else ("🟢 يسهل الاقتراض" if us10y_trend < -1.0 else "⚪ حيادي")
         spy_impact = "🟢 شهية مخاطر عالية" if spy_trend > 0.3 else ("🔴 هروب للملاذات" if spy_trend < -0.3 else "⚪ حيادي")
+        vix_impact = "🔴 ذعر وتسييل" if vix_trend > 5.0 else ("🟢 استقرار وثقة" if vix_trend < -5.0 else "⚪ حيادي")
 
-        return spy_trend, spy_impact, dxy_trend, dxy_impact, us10y_trend, us10y_impact
+        # 🟢 الإرجاع أصبح 9 متغيرات بشكل صحيح ومتطابق تماماً
+        return spy_trend, spy_impact, dxy_trend, dxy_impact, us10y_trend, us10y_impact, vix_current, vix_trend, vix_impact
 
     except Exception as e:
         print(f"⚠️ [Isolated Macro] Fetch Error: {e}")
-        return 0.0, "⚪", 0.0, "⚪", 0.0, "⚪"
+        # 🟢 حالة الفشل ترجع 9 متغيرات آمنة لمنع الانهيار
+        return 0.0, "⚪", 0.0, "⚪", 0.0, "⚪", 15.0, 0.0, "⚪"
+
 import xgboost as xgb
 import onnxruntime as ort
 
@@ -6247,7 +6256,7 @@ async def btc_apex_vanguard_command(message: types.Message):
             cb_price, binance_price, premium_pct, premium_z, basis_z = live_data
             _, _, funding_val, _, funding_z = funding_data
             cme_premium_pct, cme_trend, ibit_vol_surge, ibit_action = ws_data
-            spy_trend, spy_impact, dxy_trend, dxy_impact, us10y_trend, us10y_impact = macro_data
+            spy_trend, spy_impact, dxy_trend, dxy_impact, us10y_trend, us10y_impact, vix_current, vix_trend, vix_impact = macro_data
 
             # 4. 🧠 تغذية مصفوفة النوايا (Fusion Matrix)
             apex_intent, apex_verdict = evaluate_apex_matrix(
