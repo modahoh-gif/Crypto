@@ -56,7 +56,7 @@ async def _patched_binance_get(self, url, *args, **kwargs):
 
     is_futures = parsed_url.path.startswith(('/fapi', '/dapi', '/futures'))
     # =================================================================
-    # 🛑 التعديل الجذري الآمن: إرسال الفيوتشرز عبر البروكسي باستخدام الدالة الأصلية لمنع Recursion
+    # 🛑 التعديل المؤسساتي النهائي: إرسال الفيوتشرز عبر البروكسي مع تنظيف الهيدرز كلياً لمنع 403
     # =================================================================
     if is_futures:
         clean_url = url_str
@@ -69,37 +69,42 @@ async def _patched_binance_get(self, url, *args, **kwargs):
         else:
             clean_url = clean_url.replace("api.binance.com", "fapi.binance.com")
             
-        # 💉 رابط البروكسي الياباني الخاص بك
+        # 💉 إعداد بيانات البروكسي كـ HTTP/1.1 نظيف ومستقل
         PROXY_URL = "http://gsmyr800:Koiwkvw9hB@212.68.184.110:50100"
         
-        # إضافة User-Agent مؤسساتي للتمويه
-        headers = kwargs.get("headers", {})
-        headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        kwargs["headers"] = headers
+        # هندسة هيدرز بشرية كاملة 100% لتمويه جدار الحماية
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+            "Accept-Language": "en-US,en;q=0.9",
+            "X-MBX-APIKEY": BINANCE_API_KEY
+        }
 
-        # نظام الحماية: 3 محاولات للاتصال لامتصاص أي تقطيع في الشبكة
+        # نظام الحماية المتتابع (3 محاولات)
         for attempt in range(3):
             try:
-                # نفتح الاتصال مع البروكسي كـ Transport معزول تماماً لمنع التداخل مع الحقن السحري
-                proxy_transport = httpx.AsyncHTTPTransport(proxy=PROXY_URL, verify=False)
+                # 🧠 السحر هنا: نمنع httpx من تسريب هيدر Proxy-Authorization إلى بايننس
+                # ونعزل الـ Transport ليعمل بنظام HTTP/1.1 الصارم ليتوافق مع أجهزة Proxy-Seller
+                proxy = httpx.Proxy(url=PROXY_URL)
+                proxy_transport = httpx.AsyncHTTPTransport(proxy=proxy, verify=False, http1=True, http2=False)
                 
-                async with httpx.AsyncClient(transport=proxy_transport, timeout=10.0) as proxy_client:
-                    # 🚀 التعديل الذهبي: استدعاء الدالة الأصلية الخام المحفوظة في كودك لكسر الـ Recursion
-                    res = await _original_httpx_get(proxy_client, clean_url, *args, **kwargs)
+                async with httpx.AsyncClient(transport=proxy_transport, timeout=12.0) as proxy_client:
+                    # نرسل الطلب مستخدمين الدالة الأصلية الخام لكسر التكرار اللانهائي
+                    res = await _original_httpx_get(proxy_client, clean_url, headers=headers, params=kwargs.get('params'))
                     
                     if res.status_code == 200:
                         return res
-                    elif res.status_code == 302:
-                        print(f"⚠️ [Proxy] بايننس حاولت التوجيه 302 عبر البروكسي. محاولة {attempt+1}")
-                        await asyncio.sleep(1)
+                    elif res.status_code in [403, 302]:
+                        print(f"⚠️ [Proxy Blocked] بايننس ردت بكود {res.status_code} عبر البروكسي. محاولة {attempt+1}")
+                        await asyncio.sleep(1.5)
                         continue
                     else:
                         return res
             except Exception as e:
-                print(f"⚠️ [Proxy Error] خطأ في اتصال الفيوتشرز (محاولة {attempt+1}): {e}")
-                await asyncio.sleep(1)
+                print(f"⚠️ [Proxy Network Error] فشل عبر البروكسي (محاولة {attempt+1}): {e}")
+                await asyncio.sleep(1.5)
         
-        # خطة الطوارئ الأخيرة بالدالة الأصلية
+        # خطة الطوارئ الأخيرة بالدالة الأصلية في حال تفحم البروكسي
         return await _original_httpx_get(self, clean_url, *args, **kwargs)
     # =================================================================
 
