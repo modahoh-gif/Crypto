@@ -22,7 +22,7 @@ from urllib.parse import urlparse, urlunparse
 
 # 🚀 قائمة الووركرز أو سيرفرات بايننس البديلة
 BINANCE_BASES = [
-    "https://binance-sain.mo-dahoh.workers.dev",
+    "https://bina.tgcryptobot.com",
     "https://binance.mor-aghyad6.workers.dev",
     "https://binani.gsmyr800.workers.dev",
     "https://orange-mountain-22d2.mor-aghyad3.workers.dev",
