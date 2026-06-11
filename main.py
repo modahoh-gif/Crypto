@@ -34,64 +34,88 @@ BINANCE_BASES = [
 _original_httpx_get = httpx.AsyncClient.get
 
 # 2. نصنع دالة "الفلتر الذكي"
+# 2. الفلتر الذكي النهائي (Tier-1 Split-Router)
 async def _patched_binance_get(self, url, *args, **kwargs):
     url_str = str(url)
     parsed_url = urlparse(url_str)
     
-    # 📝 [اللوغ] طباعة الطلب الأصلي قبل أي تعديل
-    # print(f"🔄 [Network] اعتراض طلب GET موجه إلى: {parsed_url.netloc}{parsed_url.path}")
-
-    # 🛑 فلتر الأمان 1: إذا الطلب لـ Bybit، أو منصات أخرى، مشّيه فوراً
+    # 🛑 1. فلتر الإعفاء الخارجي
     if "binance" not in parsed_url.netloc and "workers.dev" not in parsed_url.netloc:
-        print(f"⏩ [Network] تمرير طلب خارجي مباشرة إلى: {parsed_url.netloc}")
         return await _original_httpx_get(self, url, *args, **kwargs)
 
-    # 🟢 المعالجة الذكية لطلبات Binance Spot:
+    # ⏳ 2. انتظار الإشارة الخضراء (حماية الشريان الرئيسي)
+    await binance_rate_limit_event.wait()
+
+    # 🚀 3. التوجيه المباشر للمشتقات (Futures Bypass)
+    # لا نرسل مسارات fapi و dapi إلى Cloudflare أبداً لتجنب الحظر 418
+    if "/fapi/" in parsed_url.path or "/dapi/" in parsed_url.path or "fapi" in parsed_url.netloc or "dapi" in parsed_url.netloc:
+        # استبدال أي محاولة لاستخدام ووركر بالرابط الرسمي لبايننس فيوتشرز
+        real_host = "dapi.binance.com" if "/dapi/" in parsed_url.path else "fapi.binance.com"
+        direct_url = urlunparse(("https", real_host, parsed_url.path, parsed_url.params, parsed_url.query, parsed_url.fragment))
+        
+        # إضافة API Key (للقراءة فقط) كدرع حماية إضافي (اختياري لكنه سحري)
+        headers = kwargs.get('headers', {})
+        if "X-MBX-APIKEY" not in headers:
+            headers["X-MBX-APIKEY"] = BINANCE_API_KEY # استخدام المفتاح يرفع الليمت ويمنع حظر WAF
+        kwargs['headers'] = headers
+
+        res = await _original_httpx_get(self, direct_url, *args, **kwargs)
+        
+        # مكابح الطوارئ للسيرفر الأصلي
+        if res.status_code == 429:
+            retry_after = int(res.headers.get("Retry-After", 60))
+            print(f"⚠️ [Futures Direct] 429 Limit! تجميد {retry_after} ثانية.")
+            asyncio.create_task(handle_binance_rate_limit(retry_after))
+        elif res.status_code == 418:
+            print(f"🚨 [Futures Direct] 418 BAN! السيرفر الأصلي تحت الحظر، إيقاف 5 دقائق.")
+            asyncio.create_task(handle_binance_rate_limit(300))
+            
+        return res
+
+    # 🟢 4. التوجيه عبر الـ Workers لبيانات السبوت (Spot) فقط
     bases = BINANCE_BASES.copy()
-    random.shuffle(bases) # توزيع الحمل العشوائي
+    random.shuffle(bases)
 
     last_response = None
     for base in bases:
         try:
             base_parsed = urlparse(base)
-            
-            # 🛠️ دمج الرابط الصحيح: نحافظ على المسار (path) والمتغيرات (query) كما هي تماماً!
             new_url = urlunparse((
                 base_parsed.scheme,
                 base_parsed.netloc,
                 parsed_url.path,
                 parsed_url.params,
-                parsed_url.query,  # 👈 هذا السطر يعيد (symbol=BTCUSDT) ويحل مشكلة 400
+                parsed_url.query,  
                 parsed_url.fragment
             ))
             
-            print(f"🔀 [Network] جاري محاولة الاتصال عبر: {new_url}")
-            print(f"DEBUG URL: {new_url}")
-            print(f"DEBUG PARAMS: {kwargs.get('params')}") 
-            # إرسال الطلب
             res = await _original_httpx_get(self, new_url, *args, **kwargs)
             
             if res.status_code == 200:
-                print(f"✅ [Network] نجاح الاتصال! (الرد: 200) من السيرفر: {base_parsed.netloc}")
                 return res
                 
-            print(f"⚠️ [Network] السيرفر {base_parsed.netloc} رفض الطلب بخطأ {res.status_code}، جاري التبديل...")
+            # كابح الطوارئ للووركرز
+            if res.status_code == 429:
+                retry_after = int(res.headers.get("Retry-After", 60))
+                print(f"⚠️ [Worker Spot] 429 Limit من السيرفر {base_parsed.netloc}! تجميد شامل.")
+                asyncio.create_task(handle_binance_rate_limit(retry_after))
+                return res 
+                
+            if res.status_code == 418:
+                print(f"🚨 [Worker Spot] 418 BAN من {base_parsed.netloc}! تجميد إجباري.")
+                asyncio.create_task(handle_binance_rate_limit(300))
+                return res
+
             last_response = res
             
         except Exception as e:
-            print(f"❌ [Network] خطأ انقطاع اتصال/شبكة في {base_parsed.netloc}: {str(e)}")
             continue
             
-    # 🚨 إذا وصلنا هنا، يعني أن جميع الروابط الـ 4 فشلت!
-    print(f"🚨 [Network-Critical] فشلت جميع سيرفرات Binance الأساسية في الاستجابة للمسار: {parsed_url.path}")
-    
-    # 🛡️ جدار حماية أخير لمنع كراش البوت (AttributeError: 'NoneType' has no attribute 'status_code')
     if last_response is None:
-        print("🛡️ [Network] إرجاع استجابة وهمية (500) لمنع انهيار الرادار.")
-        # نعيد كائن استجابة وهمي يحتوي على كود 500 لكي تتخطاه دوال التحليل لديك بأمان
         return httpx.Response(500, request=httpx.Request("GET", url_str))
         
     return last_response 
+
 
 # 3. 💉 الحقن السحري: نستبدل دالة get في المكتبة بالدالة الذكية الخاصة بنا
 httpx.AsyncClient.get = _patched_binance_get
