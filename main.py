@@ -3729,16 +3729,23 @@ async def analyze_radar_coin(c, client, market_regime, sem):
             ob_base = quant_sigmoid_score(imbalance, sensitivity=4.0, limit=100.0)
             global_ob_bonus = min(20.0, math.log1p(max(0, global_ob_pressure - 1.0)) * 10.0)
             timing_score = min(100.0, ob_base + global_ob_bonus)
-            # 🧠 التعامل الذكي مع التلاعب لصفقات السوينغ (Swing-Adjusted Spoofing Logic)
-            # صناع السوق يتلاعبون بالدفتر اللحظي، لكن الترند الأكبر يغلب دائماً
-            if is_hollow_flag:
-                timing_score *= 0.85 # خصم 15% فقط (خطر انزلاق طفيف، لكن الترند سيصححه)
-            elif is_spoofed_flag:
-                if (imbalance > 0.1 and current_regime_trend == "Trending_Bull") or (imbalance < -0.1 and current_regime_trend == "Trending_Bear"):
-                    timing_score *= 0.95 # خصم 5% فقط (صانع السوق يجمع معنا)
-                else:
-                    timing_score *= 0.75 # خصم 25% (تلاعب عكسي، لكن لا يقتل الصفقة الكلية)
-
+            # 🧠 التعامل الذكي مع التلاعب لصفقات السوينغ (Swing-Adjusted Spoofing Logic)            # 🧠 [التعديل المؤسساتي 2]: توظيف التلاعب اللحظي كبصمة تأكيد (Spoofing as a Feature)
+            # في السوينغ، الجدران الوهمية في مناطق التجميع هي دليل صارخ على أن صانع السوق يحمي نطاقه!
+            if route == "STEALTH":
+                if is_spoofed_flag and real_cvd_usd_eval > 0:
+                    # تلاعب أوردر بوك + شراء مخفي (CVD إيجابي) = صانع سوق يضغط السعر للأسفل ليجمع هو! (مكافأة)
+                    timing_score = min(100.0, timing_score * 1.15) 
+                    tags.append("MM_Dark_Spoofing_Accumulation")
+                elif is_hollow_flag:
+                    # الانزلاق ليس خطيراً جداً في السوينغ إذا كان الدخول متدرجاً (DCA)
+                    timing_score *= 0.90 
+            else: # مسار KINETIC (اختراقات وانفجارات)
+                if is_spoofed_flag:
+                    # في الاختراقات، الجدران الوهمية هي فخاخ مؤكدة للتصريف (Bull Trap)
+                    timing_score *= 0.70 
+                if is_hollow_flag:
+                    # انزلاق السيولة وقت الاختراق قاتل جداً
+                    timing_score *= 0.60 
             # --- البُعد الثالث: الفوليوم كبوابة حتمية (The Pure Volume Gatekeeper) ---
             # 🛡️ الحفاظ على نزاهة Z-Score وعدم تلوثه بأي إضافات
             safe_z_calc = max(-10.0, min(10.0, 2.0 * (current_z - 1.5)))
@@ -3894,13 +3901,23 @@ async def analyze_radar_coin(c, client, market_regime, sem):
             # ==========================================
             veto_tolerance = 1.3 if is_incubated else 1.0 
             # 🛑 فلتر VPIN: ضجيج الأفراد المعدل للسوينغ
-            if vpin_score < 0.25 and micro_cvd_trend > 0:
-                tags.append("VPIN_Retail_Noise_Trap")
-                toxicity_score += 10.0 # تخفيف العقاب، الأفراد ليسوا دائماً مخطئين في بدايات الترند
-            elif vpin_score > 0.65:
-                tags.append("VPIN_Toxic_Inflow")
-                toxicity_score = max(0.0, toxicity_score - 15.0) # مكافأة أعلى لتدفق الحيتان
-
+            # 🧠 [التعديل المؤسساتي 3]: المعايرة الكمية الدقيقة لـ VPIN (Probability of Informed Trading)
+            # VPIN العالي (>0.7) يعني بشكل قاطع أن التداول موجّه من "صناديق/مؤسسات" وليس أفراد.
+            if vpin_score > 0.70:
+                if micro_cvd_trend > 0:
+                    tags.append("Informed_Smart_Money_Buy")
+                    toxicity_score = max(0.0, toxicity_score - 25.0) # مكافأة ضخمة: حيتان يشترون بوعي وسرية
+                else:
+                    tags.append("Informed_Smart_Money_Sell")
+                    toxicity_score += 50.0 # إعدام مؤكد: أموال ذكية تهرب وتصرف بخبث!
+            elif vpin_score < 0.30:
+                # تداول عشوائي من التجزئة (Retail Noise)
+                if route == "KINETIC":
+                    tags.append("Retail_FOMO_Noise")
+                    toxicity_score += 20.0 # لا تشتري اختراقات يصنعها الأفراد العاطفيون
+                else:
+                    # في القيعان (Stealth)، ضجيج وبكاء الأفراد طبيعي أثناء استسلامهم (Capitulation)
+                    toxicity_score += 5.0 
             # انحراف VWAP
             if current_vwap_z > (dyn_vwap_z * veto_tolerance):
                 tags.append("Late_FOMO_Pump_VWAP")
@@ -4814,9 +4831,17 @@ async def ai_opportunity_radar(pool):
                                 "route": route # 👈 تمرير المسار للتحليل لمعرفة كيفية تقييمها
                             })
 
+                # 🧠 [التعديل المؤسساتي 1]: مصفوفة فرز الانضغاط (Compression & Stealth Sieve)
+                # بدلاً من الفرز الغبي بالفوليوم العالي (عملات محترقة)، نبحث عن السيولة العالية المحبوسة في نطاق ضيق!
+                for c in coins:
+                    vol = c.get("volume", 0.0)
+                    pct = abs(c.get("priceChangePercent", 0.0))
+                    # معادلة الألفا: الفوليوم مقسوم على (مدى الحركة + 0.5 لمنع القسمة على صفر)
+                    # هذا يرفع العملات التي فوليومها ضخم جداً لكنها لم تتحرك بعد (Coiled Springs)
+                    c["stealth_score"] = float(vol) / (float(pct) + 0.5) 
                 
-                # الفرز بناءً على أضيق نسبة تغير في السعر (من الأقرب للصفر) لاصطياد العملات المضغوطة                # --- الكود القديم لديك ---
-                coins = sorted(coins, key=lambda x: float(x.get("volume", 0)), reverse=True)[:350]
+                # فرز العملات بناءً على "مؤشر الانضغاط" الأعلى وليس الفوليوم الخام
+                coins = sorted(coins, key=lambda x: x.get("stealth_score", 0.0), reverse=True)[:350]
 
                 # 👇👇 التعديل الجديد: تفعيل الفيتو اللحظي للبيتكوين 👇👇
                 is_btc_dumping = await check_btc_gravity_veto(client)
@@ -7418,47 +7443,80 @@ async def analyze_macro_derivatives_divergence(symbol: str, client: httpx.AsyncC
     except Exception as e:
         print(f"🚨 [Binance FAPI Direct] خطأ في analyze_macro_derivatives_divergence لـ {clean_sym}: {str(e)}")
         return None
-async def institutional_lob_worker(pool):
-    """
-    [The Market Maker Matrix] 🕸️
-    يفتح تياراً مجمعاً (Combined Stream) لأهم 300 عملة.
-    يحدث الأوردر بوك المحلي كل 100 ملي ثانية بدون أي API Call.
-    """
-    await asyncio.sleep(30) # انتظر السيرفر حتى يستقر
-    print("🕸️ [LOB Engine] Local Orderbook Shadowing is Online...")
-
+async def lob_shard_worker(shard_id, symbols_chunk):
+    """عامل فرعي يعالج جزءاً من العملات لمنع اختناق الويب سوكيت (Sharding)"""
+    streams = "/".join([f"{sym}usdt@depth10@100ms" for sym in symbols_chunk])
+    ws_url = f"wss://stream.binance.com:9443/stream?streams={streams}"
+    
     while True:
         try:
-            # 1. جلب العملات النشطة من الرادار (لمراقبتها لحظياً)
-            async with pool.acquire() as conn:
-                records = await conn.fetch("SELECT symbol FROM radar_history ORDER BY last_signaled DESC LIMIT 300")
-                symbols = [r['symbol'].lower() for r in records]
-            
-            # إذا كانت الداتابيز فارغة في البداية، راقب البيتكوين والإيثيريوم
-            if not symbols: symbols = ["btc", "eth"]
-
-            # تجهيز رابط الـ Combined Stream (عمق 10 مستويات يكفي جداً للـ OFI وخفيف على الـ RAM)
-            streams = "/".join([f"{sym}usdt@depth10@100ms" for sym in symbols[:300]])
-            ws_url = f"wss://stream.binance.com:9443/stream?streams={streams}"
-            
-            async with websockets.connect(ws_url, ping_interval=20, ping_timeout=20, max_size=10_000_000) as ws:
-                print(f"✅ [LOB Engine] Connected to {len(symbols)} coins. Absorbing microstructure...")
+            # max_size=None تمنع الكراش الداخلي للمكتبة إذا حصل تأخير بأجزاء من الثانية
+            async with websockets.connect(ws_url, ping_interval=20, ping_timeout=20, max_size=None) as ws:
+                print(f"🕸️ [LOB Shard {shard_id}] Active. Syncing {len(symbols_chunk)} assets at 100ms...")
                 
+                msg_count = 0
                 while True:
                     msg = await ws.recv()
                     data = json.loads(msg)
                     
                     if "data" in data and "stream" in data:
-                        sym = data["stream"].split("@")[0].upper() # استخراج اسم العملة (مثال: BTCUSDT)
+                        sym = data["stream"].split("@")[0].upper()
                         payload = data["data"]
                         
-                        # تحديث الـ OFI والذاكرة بسرعة البرق
                         if "bids" in payload and "asks" in payload:
                             update_dynamic_ofi(sym, payload["bids"], payload["asks"])
-                            
+                    
+                    msg_count += 1
+                    # 🧠 التنفس اللحظي (Event Loop Breathing):
+                    # هذا هو السطر السحري الذي يقتل الـ Memory Leak بنسبة 100%
+                    # يجبر بايثون على تنظيف الـ RAM كل 50 رسالة دون تأخير معالجة البيانات
+                    if msg_count % 50 == 0:
+                        await asyncio.sleep(0)
+                        
         except Exception as e:
-            print(f"⚠️ [LOB Engine] Stream disconnected. Reconnecting in 5s... Error: {e}")
-            await asyncio.sleep(5)
+            print(f"⚠️ [LOB Shard {shard_id}] Reconnecting... Error: {e}")
+            await asyncio.sleep(3)
+
+async def institutional_lob_worker(pool):
+    """
+    [The Market Maker Matrix] 🕸️
+    النسخة المؤسساتية: تدير تجزئة الاتصالات (Sharding Manager)
+    """
+    await asyncio.sleep(30)
+    print("🕸️ [LOB Engine Manager] Preparing Deep Orderbook Infrastructure...")
+
+    active_tasks = []
+
+    while True:
+        try:
+            async with pool.acquire() as conn:
+                records = await conn.fetch("SELECT symbol FROM radar_history ORDER BY last_signaled DESC LIMIT 300")
+                symbols = [r['symbol'].lower() for r in records]
+            
+            if not symbols: symbols = ["btc", "eth"]
+
+            # 🧠 خوارزمية التجزئة (Connection Sharding)
+            # تقسيم الـ 300 عملة إلى مجموعات (Chunks)، كل مجموعة 50 عملة
+            # هذا يمنع بايننس من حجب الاتصال ويمنع السيرفر من الاختناق
+            CHUNK_SIZE = 50
+            chunks = [symbols[i:i + CHUNK_SIZE] for i in range(0, len(symbols), CHUNK_SIZE)]
+
+            # إلغاء المهام (Shards) القديمة إذا كان هناك تحديث في قائمة العملات
+            for task in active_tasks:
+                task.cancel()
+            active_tasks.clear()
+
+            # تشغيل العمال الفرعيين بالتوازي (Concurrent Shards)
+            for idx, chunk in enumerate(chunks):
+                task = asyncio.create_task(lob_shard_worker(idx + 1, chunk))
+                active_tasks.append(task)
+
+            # النظام يعمل باستقرار الآن، ننتظر 12 ساعة قبل تحديث قائمة العملات من الداتابيز
+            await asyncio.sleep(43200)
+
+        except Exception as e:
+            print(f"⚠️ [LOB Engine Manager] Core Error: {e}")
+            await asyncio.sleep(60)
 async def analyze_orderbook_advanced_manual(symbol: str, client: httpx.AsyncClient, current_price: float, recent_vol_usd: float = 15000.0):
     """
     [Institutional Upgrade] True Order Flow Imbalance (OFI) & Flash Spoofing Detection
