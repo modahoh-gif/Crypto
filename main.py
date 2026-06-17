@@ -5566,6 +5566,219 @@ async def institutional_deep_scan(m: types.Message):
         import traceback
         print(f"⚠️ [Apex Scan Error]: {traceback.format_exc()}")
         await processing_msg.edit_text(f"⚠️ <b>Execution Halted (Critical Error):</b>\n<code>{str(e)}</code>\n<i>النظام التقط خطأ غير متوقع وقام بتعليق التنفيذ لحماية الصندوق.</i>", parse_mode=ParseMode.HTML)
+# ====================================================================
+# 🏛 THE ABSOLUTE MACRO ENGINE (ISOLATED MODULE) 🏛
+# ====================================================================
+import httpx
+import asyncio
+import numpy as np
+from aiogram.filters import Command
+from aiogram.enums import ParseMode
+from aiogram import types
+
+class AsyncApexMacroEngine:
+    def __init__(self):
+        # 1. الروابط الرسمية للبيانات
+        self.defillama_url = "https://stablecoins.llama.fi/stablecoincharts/all"
+        self.deribit_url = "https://deribit.com/api/v2/public/get_book_summary_by_currency?currency=BTC&kind=option"
+        
+        # 2. مفتاح الـ API الخاص بك لمنصة CryptoQuant (تم حقنه بأمان)
+        self.cq_api_key = "TZbP9TVa7ZWuPTeq9XkIjhjDndWVxzubHMKecQIG74NmbTyQq5aec23KDn2CFh5fxMYeE3cax0KI1Brmp4oQCbihl6BBuhC4f"
+        self.cq_headers = {"Authorization": f"Bearer {self.cq_api_key}"}
+
+    async def fetch_global_liquidity(self, client: httpx.AsyncClient):
+        """المحرك الأول: سيولة الفيات العالمية (M2 Proxy)"""
+        try:
+            res = await client.get(self.defillama_url, timeout=10.0)
+            if res.status_code == 200:
+                data = res.json()
+                recent_data = data[-90:] # آخر 90 يوماً
+                current_mc = recent_data[-1]['totalCirculatingUSD']['all']
+                past_90_mc = recent_data[0]['totalCirculatingUSD']['all']
+                past_30_mc = recent_data[-30]['totalCirculatingUSD']['all']
+
+                change_90d = ((current_mc - past_90_mc) / past_90_mc) * 100
+                change_30d = ((current_mc - past_30_mc) / past_30_mc) * 100
+                
+                return {
+                    "current_liquidity_B": current_mc / 1e9,
+                    "change_90d": change_90d,
+                    "change_30d": change_30d,
+                    "trend": "توسع إيجابي 🔥" if change_90d > 0 else "انكماش سلبي 🔴"
+                }
+        except Exception as e:
+            print(f"⚠️ [Macro Engine] DefiLlama Error: {e}")
+        return None
+
+    async def fetch_onchain_macro(self, client: httpx.AsyncClient):
+        """المحرك الثاني: صدمة العرض المؤسساتي (On-Chain)"""
+        try:
+            # 1. جلب احتياطي المنصات (Exchange Reserves)
+            reserve_url = "https://api.cryptoquant.com/v1/btc/exchange-flows/reserve?window=day&limit=30"
+            res_reserve = await client.get(reserve_url, headers=self.cq_headers, timeout=10.0)
+            
+            # 2. جلب مؤشر القيمة العادلة (MVRV)
+            mvrv_url = "https://api.cryptoquant.com/v1/btc/network-indicator/mvrv?window=day&limit=1"
+            res_mvrv = await client.get(mvrv_url, headers=self.cq_headers, timeout=10.0)
+
+            if res_reserve.status_code == 200 and res_mvrv.status_code == 200:
+                reserve_data = res_reserve.json()['result']['data']
+                current_reserve = reserve_data[-1]['reserve']
+                past_30_reserve = reserve_data[0]['reserve']
+                reserve_change = ((current_reserve - past_30_reserve) / past_30_reserve) * 100
+
+                mvrv_value = res_mvrv.json()['result']['data'][0]['mvrv']
+
+                macro_status = "استقرار ⚪"
+                if mvrv_value < 1.2: macro_status = "قاع كلي (Accumulation) 🟢"
+                elif mvrv_value > 3.0: macro_status = "قمة كلية (Distribution) 🔴"
+
+                return {
+                    "mvrv": mvrv_value,
+                    "macro_status": macro_status,
+                    "reserve_change_30d": reserve_change,
+                    "is_supply_shock": reserve_change < -1.5 
+                }
+            else:
+                print(f"⚠️ [Macro Engine] CQ API Error: Reserve={res_reserve.status_code}, MVRV={res_mvrv.status_code}")
+        except Exception as e:
+            print(f"⚠️ [Macro Engine] CryptoQuant Exception: {e}")
+        return None
+
+    async def fetch_options_max_pain(self, client: httpx.AsyncClient):
+        """المحرك الثالث: نقطة الألم الأقصى لصناع السوق (Deribit GEX)"""
+        try:
+            res = await client.get(self.deribit_url, timeout=10.0)
+            if res.status_code == 200:
+                data = res.json().get('result', [])
+                calls, puts, strikes = [], [], set()
+
+                for item in data:
+                    inst = item['instrument_name'].split('-')
+                    if len(inst) >= 4:
+                        strike = float(inst[2])
+                        opt_type = inst[3]
+                        oi = item.get('open_interest', 0)
+                        
+                        strikes.add(strike)
+                        if opt_type == 'C': calls.append({'strike': strike, 'oi': oi})
+                        else: puts.append({'strike': strike, 'oi': oi})
+
+                strikes = sorted(list(strikes))
+                min_pain = float('inf')
+                max_pain_strike = 0
+
+                # 🧠 خوارزمية تسعير الألم (Max Pain Algorithm)
+                for test_price in strikes:
+                    total_pain = 0
+                    for c in calls:
+                        if test_price > c['strike']: total_pain += (test_price - c['strike']) * c['oi']
+                    for p in puts:
+                        if test_price < p['strike']: total_pain += (p['strike'] - test_price) * p['oi']
+                    
+                    if total_pain < min_pain:
+                        min_pain = total_pain
+                        max_pain_strike = test_price
+
+                total_call_oi = sum(c['oi'] for c in calls)
+                total_put_oi = sum(p['oi'] for p in puts)
+                pc_ratio = total_put_oi / total_call_oi if total_call_oi > 0 else 1
+
+                return {
+                    "max_pain": max_pain_strike,
+                    "pc_ratio": pc_ratio,
+                    "total_oi_btc": total_call_oi + total_put_oi
+                }
+        except Exception as e:
+            print(f"⚠️ [Macro Engine] Deribit Error: {e}")
+        return None
+
+    async def generate_institutional_report(self):
+        """الدمج النهائي وإصدار التقرير"""
+        async with httpx.AsyncClient() as client:
+            # 🚀 إطلاق المحركات الثلاثة بالتوازي (Zero Latency)
+            liq, onchain, opt = await asyncio.gather(
+                self.fetch_global_liquidity(client),
+                self.fetch_onchain_macro(client),
+                self.fetch_options_max_pain(client)
+            )
+
+        if not liq or not opt:
+            return "⚠️ **خطأ في جلب بيانات الماكرو من الخوادم العالمية. يرجى المحاولة لاحقاً.**"
+
+        # 🛡️ حماية في حال كان اشتراك CryptoQuant لا يدعم الميزات أو فيه خطأ
+        onchain_text = ""
+        verdict = ""
+        
+        if onchain:
+            supply_shock_status = "سحب للحوافظ الباردة (تجميع) 🟢" if onchain['is_supply_shock'] else "توزيع أو استقرار ⚪"
+            onchain_text = f"""
+🧱 <b>المحرك الثاني: صدمة العرض (On-Chain Dynamics):</b>
+• احتياطي المنصات (30 يوم): <code>{onchain['reserve_change_30d']:+.2f}%</code>
+• حالة العرض (Supply Shock): <b>{supply_shock_status}</b>
+• القيمة العادلة للحيتان (MVRV): <code>{onchain['mvrv']:.2f}</code> ({onchain['macro_status']})
+"""
+            # هندسة القرار الكلي (Macro Verdict)
+            if liq['change_90d'] > 0 and onchain['mvrv'] < 1.5 and onchain['reserve_change_30d'] < 0:
+                verdict = "🟢 <b>Risk-On:</b> السيولة تتوسع، الحيتان يسحبون العملات، والمؤشرات في قاع. <b>الماكرو صاعد بقوة. أي هبوط لحظي هو فخ (Bear Trap) لضرب السيولة.</b>"
+            elif liq['change_90d'] < 0 and onchain['mvrv'] > 3.0:
+                verdict = "🔴 <b>Risk-Off:</b> انكماش في السيولة مع تضخم في التقييم. <b>الماكرو هابط. نحن في قمة دورة، احذر من مصيدة الثيران.</b>"
+            else:
+                verdict = f"⚖️ <b>Pegging Phase:</b> تضارب هيكلي. السعر سينجذب مغناطيسياً نحو نقطة الـ Max Pain عند <code>${opt['max_pain']:,.0f}</code> لحرق مشتري الخيارات ريثما تتضح سيولة الفيات."
+        else:
+            onchain_text = "\n🧱 <b>المحرك الثاني: (On-Chain Dynamics):</b>\n• <i>البيانات غير متاحة حالياً من مزود الخدمة.</i>\n"
+            verdict = f"⚖️ <b>Pegging Phase:</b> السعر سينجذب مغناطيسياً نحو نقطة الـ Max Pain عند <code>${opt['max_pain']:,.0f}</code> بناءً على عقود الخيارات."
+
+        pc_status = "سلبية 🔴" if opt['pc_ratio'] > 1.2 else ("إيجابية 🟢" if opt['pc_ratio'] < 0.8 else "حيادية ⚪")
+
+        report = f"""
+🏛 <b>APEX VANGUARD | الماكرو المطلق (Absolute Macro)</b> 🏛
+━━━━━━━━━━━━━━━━━━
+🌐 <b>المحرك الأول: سيولة الفيات (Global M2 Proxy):</b>
+• إجمالي العملات المستقرة: <code>${liq['current_liquidity_B']:.2f}</code> مليار
+• التدفق التراكمي (90 يوم): <code>{liq['change_90d']:+.2f}%</code>
+• التوجه الاستراتيجي: <b>{liq['trend']}</b>
+{onchain_text}
+⏳ <b>المحرك الثالث: مركز ثقل الخيارات (Dealers GEX):</b>
+• نقطة الألم الأقصى (Max Pain): <code>${opt['max_pain']:,.0f}</code> 🧲
+• نسبة البوت/كول (P/C Ratio): <code>{opt['pc_ratio']:.2f}</code> ({pc_status})
+• إجمالي العقود المفتوحة (OI): <code>{opt['total_oi_btc']:,.0f}</code> BTC
+
+🧭 <b>الاتجاه الاستراتيجي الأكبر (6-12 شهراً):</b>
+{verdict}
+━━━━━━━━━━━━━━━━━━
+<i>* مصادر البيانات: DefiLlama (Stablecoins), Deribit (Options), CryptoQuant (On-Chain).</i>
+"""
+        return report
+
+# ====================================================================
+# 💬 مُستقبل الأوامر من تيليجرام (Telegram Command Handler)
+# ====================================================================
+@dp.message(Command("btc_o"))
+async def absolute_macro_command(message: types.Message):
+    # 🛡️ حماية الغرفة المغلقة (Tier-1)
+    ALLOWED_IDS = [565965404, 7146339698, ADMIN_USER_ID] # تأكد من أن ADMIN_USER_ID معرف في ملفك
+    if message.from_user.id not in ALLOWED_IDS:
+        return await message.reply("🚫 <b>Access Denied. Tier-1 Clearance Required.</b>", parse_mode=ParseMode.HTML)
+
+    loading_text = (
+        "📡 <i>تهيئة محرك الماكرو المطلق (Absolute Macro)...</i>\n"
+        "<i>1️⃣ الاتصال بخوادم DefiLlama لحساب سيولة الفيات...</i>\n"
+        "<i>2️⃣ اختراق قواعد بيانات CryptoQuant للـ On-Chain...</i>\n"
+        "<i>3️⃣ تحليل دفاتر Deribit لتحديد نقطة الألم الأقصى...</i> 🦅"
+    )
+    processing_msg = await message.reply(loading_text, parse_mode=ParseMode.HTML)
+
+    try:
+        # تشغيل المحرك
+        engine = AsyncApexMacroEngine()
+        report = await engine.generate_institutional_report()
+        
+        # عرض النتيجة
+        await processing_msg.edit_text(report, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        error_msg = f"⚠️ <b>حدث خطأ أثناء معالجة بيانات الماكرو:</b>\n<code>{str(e)}</code>"
+        await processing_msg.edit_text(error_msg, parse_mode=ParseMode.HTML)
 
 # 1. أمر طلب الـ ID
 @dp.message(Command("manage"))
