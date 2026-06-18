@@ -22,7 +22,7 @@ from urllib.parse import urlparse, urlunparse
 
 # 🚀 قائمة الووركرز أو سيرفرات بايننس البديلة
 BINANCE_BASES = [
-    "https://bina.tgcryptobot.com",
+    "https://binance-sain.mo-dahoh.workers.dev",
     "https://binance.mor-aghyad6.workers.dev",
     "https://binani.gsmyr800.workers.dev",
     "https://orange-mountain-22d2.mor-aghyad3.workers.dev",
@@ -5644,78 +5644,99 @@ class AsyncApexMacroEngine:
         return {"name": "N/A", "value": 0.0, "is_onchain": False, "score": 1.5, "is_valid": False}
 
     async def fetch_options_max_pain(self, client: httpx.AsyncClient):
-        """محرك الخيارات: Deribit (Crypto) مع جسر وول ستريت BITO ETF (Wall St Proxy)"""
-        # 1. 🛡️ المحاولة الأولى: Deribit (Filtered Front-Month)
+        """محرك الخيارات المطلق (Zero-Fail Engine): Binance Options + Deribit"""
+        
+        # 1. 🦅 المحرك الأول: Binance Options (مستقر جداً، لا يطلب كوكيز، ولا ينهار)
         try:
-            res = await client.get(self.deribit_url, timeout=12.0)
+            res = await client.get("https://eapi.binance.com/eapi/v1/ticker", timeout=10.0)
             if res.status_code == 200:
-                data = res.json().get('result', [])
-                calls, puts, strikes = [], [], set()
-                current_date = datetime.datetime.utcnow()
+                data = res.json()
+                calls, puts, strikes_set = [], [], set()
 
                 for item in data:
-                    inst = item['instrument_name'].split('-')
-                    if len(inst) >= 4:
-                        try:
-                            expiry_date = datetime.datetime.strptime(inst[1], "%d%b%y")
-                            if (expiry_date - current_date).days > 45: continue # فلترة العقود البعيدة
-                        except: continue 
-                        strike, opt_type, oi = float(inst[2]), inst[3], item.get('open_interest', 0)
-                        strikes.add(strike)
+                    sym = item.get('symbol', '')
+                    if not sym.startswith('BTC-'): continue
+                    
+                    parts = sym.split('-')
+                    if len(parts) == 4:
+                        strike = float(parts[2])
+                        opt_type = parts[3]
+                        oi = float(item.get('openInterest', 0))
+                        
+                        if oi == 0: continue
+                        
+                        strikes_set.add(strike)
                         if opt_type == 'C': calls.append({'strike': strike, 'oi': oi})
                         else: puts.append({'strike': strike, 'oi': oi})
 
-                if strikes:
-                    strikes = sorted(list(strikes))
+                if strikes_set:
+                    strikes = sorted(list(strikes_set))
+                    min_pain = float('inf')
+                    max_pain_strike = 0
+
+                    for test_price in strikes:
+                        total_pain = sum((test_price - c['strike']) * c['oi'] for c in calls if test_price > c['strike'])
+                        total_pain += sum((p['strike'] - test_price) * p['oi'] for p in puts if test_price < p['strike'])
+                        
+                        if total_pain < min_pain:
+                            min_pain = total_pain
+                            max_pain_strike = test_price
+
+                    tc_oi = sum(c['oi'] for c in calls)
+                    tp_oi = sum(p['oi'] for p in puts)
+                    
+                    return {
+                        "max_pain": max_pain_strike,
+                        "pc_ratio": tp_oi / tc_oi if tc_oi > 0 else 1.0,
+                        "total_oi_btc": tc_oi + tp_oi,
+                        "source": "Binance Options",
+                        "is_valid": True
+                    }
+        except Exception as e:
+            print(f"⚠️ [Macro] Binance Options Error: {e}")
+
+        # 2. 🛡️ المحرك الثاني: Deribit (بعد تدمير كود فلترة التواريخ الذي كان يسبب الكراش)
+        try:
+            res = await client.get(self.deribit_url, timeout=10.0)
+            if res.status_code == 200:
+                data = res.json().get('result', [])
+                calls, puts, strikes_set = [], [], set()
+
+                for item in data:
+                    inst = item.get('instrument_name', '').split('-')
+                    if len(inst) >= 4:
+                        strike = float(inst[2])
+                        opt_type = inst[3]
+                        oi = item.get('open_interest', 0)
+                        
+                        if oi == 0: continue
+
+                        strikes_set.add(strike)
+                        if opt_type == 'C': calls.append({'strike': strike, 'oi': oi})
+                        else: puts.append({'strike': strike, 'oi': oi})
+
+                if strikes_set:
+                    strikes = sorted(list(strikes_set))
                     min_pain, max_pain_strike = float('inf'), 0
                     for test_price in strikes:
                         total_pain = sum((test_price - c['strike']) * c['oi'] for c in calls if test_price > c['strike'])
                         total_pain += sum((p['strike'] - test_price) * p['oi'] for p in puts if test_price < p['strike'])
-                        if total_pain < min_pain: min_pain, max_pain_strike = total_pain, test_price
+                        if total_pain < min_pain:
+                            min_pain = total_pain
+                            max_pain_strike = test_price
 
                     tc_oi, tp_oi = sum(c['oi'] for c in calls), sum(p['oi'] for p in puts)
-                    return {"max_pain": max_pain_strike, "pc_ratio": tp_oi / tc_oi if tc_oi > 0 else 1.0, "total_oi_btc": tc_oi + tp_oi, "source": "Deribit", "is_valid": True}
+                    return {
+                        "max_pain": max_pain_strike, 
+                        "pc_ratio": tp_oi / tc_oi if tc_oi > 0 else 1.0, 
+                        "total_oi_btc": tc_oi + tp_oi, 
+                        "source": "Deribit", 
+                        "is_valid": True
+                    }
         except Exception as e:
-            print(f"⚠️ [Deribit Down] Shifting to Wall Street Proxy... Error: {e}")
+            print(f"⚠️ [Macro] Deribit Error: {e}")
 
-        # 2. 🦅 البديل المرعب: BITO ETF Options (Wall Street Proxy)
-        try:
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-            res_bito = await client.get(self.bito_options_url, headers=headers, timeout=12.0)
-            if res_bito.status_code == 200:
-                data = res_bito.json().get('optionChain', {}).get('result', [])[0]
-                
-                bito_spot = data.get('quote', {}).get('regularMarketPrice', 1.0)
-                options = data.get('options', [])[0]
-                
-                calls = options.get('calls', [])
-                puts = options.get('puts', [])
-                
-                tc_oi = sum(c.get('openInterest', 0) for c in calls)
-                tp_oi = sum(p.get('openInterest', 0) for p in puts)
-                pc_ratio = tp_oi / tc_oi if tc_oi > 0 else 1.0
-                
-                strikes = sorted(list(set([c.get('strike', 0) for c in calls] + [p.get('strike', 0) for p in puts])))
-                min_pain, max_pain_strike_bito = float('inf'), 0
-                
-                for test_price in strikes:
-                    total_pain = sum((test_price - c.get('strike', 0)) * c.get('openInterest', 0) for c in calls if test_price > c.get('strike', 0))
-                    total_pain += sum((p.get('strike', 0) - test_price) * p.get('openInterest', 0) for p in puts if test_price < p.get('strike', 0))
-                    if total_pain < min_pain:
-                        min_pain = total_pain
-                        max_pain_strike_bito = test_price
-                
-                # الإسقاط الكمّي على البيتكوين (Synthetic Projection)
-                bito_pain_ratio = max_pain_strike_bito / bito_spot
-                res_btc_spot = await client.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", timeout=5.0)
-                btc_spot_price = float(res_btc_spot.json()['price'])
-                
-                projected_btc_max_pain = btc_spot_price * bito_pain_ratio
-                
-                return {"max_pain": projected_btc_max_pain, "pc_ratio": pc_ratio, "total_oi_btc": (tc_oi + tp_oi) * 100, "source": "Wall St (BITO Proxy)", "is_valid": True}
-        except Exception as e:
-            print(f"⚠️ [Macro] Wall Street Fallback Error: {e}")
-
+        # إذا سقط الاثنان (مستحيل رياضياً وتقنياً)
         return {"max_pain": 0, "pc_ratio": 1.0, "total_oi_btc": 0, "source": "N/A", "is_valid": False}
 
     async def generate_institutional_report(self):
