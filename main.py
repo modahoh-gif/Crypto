@@ -5570,10 +5570,13 @@ async def institutional_deep_scan(m: types.Message):
 import httpx
 import asyncio
 import datetime
-import time
 from aiogram.filters import Command
 from aiogram.enums import ParseMode
 from aiogram import types
+
+# ====================================================================
+# 🏛 THE ABSOLUTE MACRO ENGINE (V5 CARTEL EDITION) 🏛
+# ====================================================================
 
 class AsyncApexMacroEngine:
     def __init__(self):
@@ -5582,6 +5585,7 @@ class AsyncApexMacroEngine:
         self.coinmetrics_url = "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics?assets=btc&metrics=CapMVRVCur&limit=1"
         self.binance_fallback_url = "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=200"
         self.ibit_url = "https://query1.finance.yahoo.com/v8/finance/chart/IBIT?interval=1d&range=5d"
+        self.bito_options_url = "https://query1.finance.yahoo.com/v7/finance/options/BITO"
 
     async def fetch_etf_liquidity(self, client: httpx.AsyncClient):
         """محرك سيولة وول ستريت (IBIT ETF)"""
@@ -5594,10 +5598,11 @@ class AsyncApexMacroEngine:
                 valid_closes = [c for c in closes if c is not None]
                 if len(valid_closes) >= 2:
                     trend = ((valid_closes[-1] - valid_closes[-2]) / valid_closes[-2]) * 100
-                    return {"etf_trend": trend, "status": "ضخ سيولة مؤسساتي 🔥" if trend > 0.5 else ("سحب سيولة 🩸" if trend < -0.5 else "ركود ⚪")}
+                    status = "ضخ سيولة مؤسساتي 🔥" if trend > 0.5 else ("سحب سيولة 🩸" if trend < -0.5 else "ركود ⚪")
+                    return {"etf_trend": trend, "status": status, "is_valid": True}
         except Exception as e:
             print(f"⚠️ [Macro] ETF Engine Error: {e}")
-        return {"etf_trend": 0.0, "status": "بيانات غير متاحة ⚪"}
+        return {"etf_trend": 0.0, "status": "بيانات غير متاحة ⚪", "is_valid": False}
 
     async def fetch_global_liquidity(self, client: httpx.AsyncClient):
         """محرك سيولة الفيات المطبوعة (Stablecoins)"""
@@ -5609,119 +5614,112 @@ class AsyncApexMacroEngine:
                     current_mc = float(data[-1]['totalCirculatingUSD'].get('peggedUSD', 0))
                     past_90_mc = float(data[-90]['totalCirculatingUSD'].get('peggedUSD', 0))
                     change_90d = ((current_mc - past_90_mc) / past_90_mc) * 100 if past_90_mc > 0 else 0
-                    return {
-                        "current_liquidity_B": current_mc / 1e9,
-                        "change_90d": change_90d,
-                        "trend": "توسع إيجابي 🔥" if change_90d > 0 else "انكماش سلبي 🔴",
-                        "is_valid": True
-                    }
+                    trend_status = "توسع إيجابي 🔥" if change_90d > 0 else "انكماش سلبي 🔴"
+                    return {"current_liquidity_B": current_mc / 1e9, "change_90d": change_90d, "trend": trend_status, "is_valid": True}
         except Exception as e:
             print(f"⚠️ [Macro] DefiLlama Error: {e}")
-        # 🛡️ Fallback مدرع يمنع انهيار الكود
         return {"current_liquidity_B": 0.0, "change_90d": 0.0, "trend": "مجهول ⚪", "is_valid": False}
 
     async def fetch_onchain_macro(self, client: httpx.AsyncClient):
-        """محرك التقييم الكلي (MVRV / Mayer Multiple) مع فلاتر ديناميكية"""
+        """محرك التقييم الكلي (MVRV / Mayer Multiple)"""
         try:
             res_cm = await client.get(self.coinmetrics_url, timeout=8.0)
             if res_cm.status_code == 200:
                 data = res_cm.json().get('data', [])
                 if data:
                     mvrv = float(data[0]['CapMVRVCur'])
-                    status = "استقرار وتجميع (Mid-Cycle) ⚖️"
-                    if mvrv < 1.2: status = "قاع كلي (Deep Value) 🟢"
-                    elif mvrv < 1.8: status = "مرحلة صعود (Markup) 📈"
-                    elif mvrv > 3.0: status = "قمة كلية (Bubble Phase) 🔴"
-                    elif mvrv > 2.4: status = "مرحلة تصريف (Markdown) 📉"
-                    return {"name": "MVRV Ratio", "value": mvrv, "status": status, "is_onchain": True, "score": mvrv}
-        except Exception:
-            pass 
+                    return {"name": "MVRV Ratio", "value": mvrv, "is_onchain": True, "score": mvrv, "is_valid": True}
+        except: pass 
 
         try:
             res_bin = await client.get(self.binance_fallback_url, timeout=8.0)
             if res_bin.status_code == 200:
                 klines = res_bin.json()
                 closes = [float(k[4]) for k in klines]
-                current_price = closes[-1]
-                ma_200 = sum(closes) / len(closes)
-                mayer = current_price / ma_200
-
-                status = "استقرار وتجميع (Mid-Cycle) ⚖️"
-                if mayer < 1.0: status = "قاع كلي (Deep Value) 🟢"
-                elif mayer < 1.5: status = "مرحلة صعود (Markup) 📈"
-                elif mayer > 2.4: status = "قمة كلية (Bubble Phase) 🔴"
-                elif mayer > 1.8: status = "مرحلة تصريف (Markdown) 📉"
-                return {"name": "Mayer Multiple", "value": mayer, "status": status, "is_onchain": False, "score": mayer}
+                mayer = closes[-1] / (sum(closes) / len(closes))
+                return {"name": "Mayer Multiple", "value": mayer, "is_onchain": False, "score": mayer, "is_valid": True}
         except Exception as e:
             print(f"⚠️ [Macro] On-Chain Fallback Error: {e}")
             
-        return {"name": "N/A", "value": 0.0, "status": "مجهول ⚪", "is_onchain": False, "score": 1.5}
+        return {"name": "N/A", "value": 0.0, "is_onchain": False, "score": 1.5, "is_valid": False}
 
     async def fetch_options_max_pain(self, client: httpx.AsyncClient):
-        """محرك ديريبت المفلتر (يتجاهل العقود الميتة البعيدة لتسريع الاستجابة ودقة الجاذبية)"""
+        """محرك الخيارات: Deribit (Crypto) مع جسر وول ستريت BITO ETF (Wall St Proxy)"""
+        # 1. 🛡️ المحاولة الأولى: Deribit (Filtered Front-Month)
         try:
-            res = await client.get(self.deribit_url, timeout=12.0)
+            res = await client.get(self.deribit_url, timeout=6.0)
             if res.status_code == 200:
                 data = res.json().get('result', [])
                 calls, puts, strikes = [], [], set()
-                
-                # فلترة العقود بناءً على تاريخ الانتهاء (نأخذ العقود القريبة فقط للتأثير اللحظي)
                 current_date = datetime.datetime.utcnow()
 
                 for item in data:
                     inst = item['instrument_name'].split('-')
                     if len(inst) >= 4:
-                        # استخراج التاريخ (مثال: BTC-27DEC24-100000-C)
                         try:
-                            expiry_str = inst[1]
-                            expiry_date = datetime.datetime.strptime(expiry_str, "%d%b%y")
-                            days_to_expiry = (expiry_date - current_date).days
-                            # 🛡️ إعدام العقود التي تبعد أكثر من 45 يوماً لأنها تشوه الجاذبية السعرية
-                            if days_to_expiry > 45:
-                                continue
-                        except:
-                            pass 
-
-                        strike = float(inst[2])
-                        opt_type = inst[3]
-                        oi = item.get('open_interest', 0)
-                        
+                            expiry_date = datetime.datetime.strptime(inst[1], "%d%b%y")
+                            if (expiry_date - current_date).days > 45: continue # فلترة العقود البعيدة
+                        except: continue 
+                        strike, opt_type, oi = float(inst[2]), inst[3], item.get('open_interest', 0)
                         strikes.add(strike)
                         if opt_type == 'C': calls.append({'strike': strike, 'oi': oi})
                         else: puts.append({'strike': strike, 'oi': oi})
 
-                if not strikes:
-                    raise ValueError("No valid near-term options found.")
+                if strikes:
+                    strikes = sorted(list(strikes))
+                    min_pain, max_pain_strike = float('inf'), 0
+                    for test_price in strikes:
+                        total_pain = sum((test_price - c['strike']) * c['oi'] for c in calls if test_price > c['strike'])
+                        total_pain += sum((p['strike'] - test_price) * p['oi'] for p in puts if test_price < p['strike'])
+                        if total_pain < min_pain: min_pain, max_pain_strike = total_pain, test_price
 
-                strikes = sorted(list(strikes))
-                min_pain = float('inf')
-                max_pain_strike = 0
+                    tc_oi, tp_oi = sum(c['oi'] for c in calls), sum(p['oi'] for p in puts)
+                    return {"max_pain": max_pain_strike, "pc_ratio": tp_oi / tc_oi if tc_oi > 0 else 1.0, "total_oi_btc": tc_oi + tp_oi, "source": "Deribit", "is_valid": True}
+        except Exception as e:
+            print(f"⚠️ [Deribit Down] Shifting to Wall Street Proxy... Error: {e}")
 
+        # 2. 🦅 البديل المرعب: BITO ETF Options (Wall Street Proxy)
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            res_bito = await client.get(self.bito_options_url, headers=headers, timeout=8.0)
+            if res_bito.status_code == 200:
+                data = res_bito.json().get('optionChain', {}).get('result', [])[0]
+                
+                bito_spot = data.get('quote', {}).get('regularMarketPrice', 1.0)
+                options = data.get('options', [])[0]
+                
+                calls = options.get('calls', [])
+                puts = options.get('puts', [])
+                
+                tc_oi = sum(c.get('openInterest', 0) for c in calls)
+                tp_oi = sum(p.get('openInterest', 0) for p in puts)
+                pc_ratio = tp_oi / tc_oi if tc_oi > 0 else 1.0
+                
+                strikes = sorted(list(set([c.get('strike', 0) for c in calls] + [p.get('strike', 0) for p in puts])))
+                min_pain, max_pain_strike_bito = float('inf'), 0
+                
                 for test_price in strikes:
-                    total_pain = sum((test_price - c['strike']) * c['oi'] for c in calls if test_price > c['strike'])
-                    total_pain += sum((p['strike'] - test_price) * p['oi'] for p in puts if test_price < p['strike'])
-                    
+                    total_pain = sum((test_price - c.get('strike', 0)) * c.get('openInterest', 0) for c in calls if test_price > c.get('strike', 0))
+                    total_pain += sum((p.get('strike', 0) - test_price) * p.get('openInterest', 0) for p in puts if test_price < p.get('strike', 0))
                     if total_pain < min_pain:
                         min_pain = total_pain
-                        max_pain_strike = test_price
-
-                total_call_oi = sum(c['oi'] for c in calls)
-                total_put_oi = sum(p['oi'] for p in puts)
-                pc_ratio = total_put_oi / total_call_oi if total_call_oi > 0 else 1
-
-                return {
-                    "max_pain": max_pain_strike,
-                    "pc_ratio": pc_ratio,
-                    "total_oi_btc": total_call_oi + total_put_oi,
-                    "is_valid": True
-                }
+                        max_pain_strike_bito = test_price
+                
+                # الإسقاط الكمّي على البيتكوين (Synthetic Projection)
+                bito_pain_ratio = max_pain_strike_bito / bito_spot
+                res_btc_spot = await client.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", timeout=3.0)
+                btc_spot_price = float(res_btc_spot.json()['price'])
+                
+                projected_btc_max_pain = btc_spot_price * bito_pain_ratio
+                
+                return {"max_pain": projected_btc_max_pain, "pc_ratio": pc_ratio, "total_oi_btc": (tc_oi + tp_oi) * 100, "source": "Wall St (BITO Proxy)", "is_valid": True}
         except Exception as e:
-            print(f"⚠️ [Macro] Deribit Filtered Error: {e}")
-            
-        return {"max_pain": 0, "pc_ratio": 1.0, "total_oi_btc": 0, "is_valid": False}
+            print(f"⚠️ [Macro] Wall Street Fallback Error: {e}")
+
+        return {"max_pain": 0, "pc_ratio": 1.0, "total_oi_btc": 0, "source": "N/A", "is_valid": False}
 
     async def generate_institutional_report(self):
-        """الدمج النهائي وصناعة القرار الكمّي (Cartel Verdict)"""
+        """الدمج النهائي وصناعة القرار الكمّي (The Cartel Verdict)"""
         async with httpx.AsyncClient() as client:
             liq, onchain, opt, etf = await asyncio.gather(
                 self.fetch_global_liquidity(client),
@@ -5730,82 +5728,110 @@ class AsyncApexMacroEngine:
                 self.fetch_etf_liquidity(client)
             )
 
-        # 🧠 هندسة القرار الكلي (Spectrum Verdict Engine) بدلاً من الثنائية الغبية
-        macro_score = 0
-        
-        # 1. سيولة الفيات
-        if liq['change_90d'] > 2.0: macro_score += 2
-        elif liq['change_90d'] > 0.0: macro_score += 1
-        elif liq['change_90d'] < -2.0: macro_score -= 2
-        
-        # 2. سيولة ETF
-        if etf['etf_trend'] > 1.0: macro_score += 2
-        elif etf['etf_trend'] < -1.0: macro_score -= 2
+        # 🧠 هندسة الأوزان الديناميكية (Dynamic Scoring Engine)
+        earned_score = 0
+        max_possible_score = 0
 
-        # 3. التقييم العادل (MVRV / Mayer)
-        val_score = onchain['score']
-        if onchain['name'] == "MVRV Ratio":
-            if val_score < 1.2: macro_score += 3
-            elif val_score < 1.8: macro_score += 1
-            elif val_score > 3.0: macro_score -= 3
-            elif val_score > 2.4: macro_score -= 1
-        else: # Mayer Multiple
-            if val_score < 1.0: macro_score += 3
-            elif val_score < 1.5: macro_score += 1
-            elif val_score > 2.4: macro_score -= 3
-            elif val_score > 1.8: macro_score -= 1
+        if liq['is_valid']:
+            max_possible_score += 4
+            if liq['change_90d'] > 2.0: earned_score += 4
+            elif liq['change_90d'] > 0.0: earned_score += 2
+            elif liq['change_90d'] < -2.0: earned_score -= 4
+            else: earned_score -= 2
+        
+        if etf['is_valid']:
+            max_possible_score += 4
+            if etf['etf_trend'] > 1.0: earned_score += 4
+            elif etf['etf_trend'] > 0.0: earned_score += 2
+            elif etf['etf_trend'] < -1.0: earned_score -= 4
+            else: earned_score -= 2
 
-        # ⚖️ النطق بالحكم (Verdict)
-        if macro_score >= 4:
-            verdict = "🟢 <b>Risk-On (Aggressive):</b> تدفقات الفيات و/أو الـ ETFs تتوسع مع تقييم ممتاز. <b>الماكرو صاعد بشراسة. أي هبوط هو فخ سيولة (Bear Trap) مخصص للتجميع.</b>"
-        elif macro_score > 0:
-            verdict = "📈 <b>Risk-On (Markup):</b> السيولة تدعم الاتجاه. السوق في مرحلة رفع الأسعار (Markup). صفقات الشراء (Long) تمتلك الأفضلية الإحصائية."
-        elif macro_score <= -4:
-            verdict = "🔴 <b>Risk-Off (Aggressive):</b> انكماش حاد في السيولة مع تضخم سعري. <b>الماكرو هابط. نحن في ذروة تصريف مؤسساتي (Distribution).</b>"
-        elif macro_score < 0:
-            verdict = "📉 <b>Risk-Off (Markdown):</b> تراجع في الزخم والسيولة. السوق يبحث عن قيعان جديدة. التداول بحذر."
+        if onchain['is_valid']:
+            max_possible_score += 4
+            v = onchain['score']
+            if onchain['name'] == "MVRV Ratio":
+                if v < 1.2: earned_score += 4
+                elif v < 1.8: earned_score += 2
+                elif v > 3.0: earned_score -= 4
+                elif v > 2.4: earned_score -= 2
+            else: # Mayer
+                if v < 1.0: earned_score += 4
+                elif v < 1.5: earned_score += 2
+                elif v > 2.4: earned_score -= 4
+                elif v > 1.8: earned_score -= 2
+
+        final_health_pct = 50.0 if max_possible_score == 0 else ((earned_score / max_possible_score) + 1.0) * 50.0
+
+        # 🛑 بوابة السيولة الإجبارية (The Liquidity Gatekeeper)
+        liquidity_bleeding = False
+        if liq['is_valid'] and etf['is_valid']:
+            liquidity_bleeding = (liq['change_90d'] <= 0) and (etf['etf_trend'] <= 0)
+        elif liq['is_valid']:
+            liquidity_bleeding = (liq['change_90d'] <= 0)
+        elif etf['is_valid']:
+            liquidity_bleeding = (etf['etf_trend'] <= 0)
+
+        # 🛡️ الفيتو: منع إشارات الصعود الوهمية إذا كانت الأموال تغادر السوق
+        if liquidity_bleeding and final_health_pct > 50.0:
+            final_health_pct = 45.0 
+
+        # ⚖️ النطق بالحكم (The Verdict)
+        if final_health_pct >= 75.0:
+            verdict = "🟢 <b>Risk-On (Aggressive):</b> تدفقات السيولة تتوسع والسعر في مناطق ممتازة. الماكرو يدعم الانفجار السعري."
+        elif final_health_pct >= 60.0:
+            verdict = "📈 <b>Risk-On (Markup):</b> توافق إيجابي. السوق في مرحلة رفع الأسعار. صفقات الشراء (Long) تمتلك الأفضلية."
+        elif final_health_pct <= 25.0:
+            verdict = "🔴 <b>Risk-Off (Capitulation):</b> انكماش حاد في السيولة وتصريف. نحن في مرحلة انهيار أو ذروة فقاعة."
+        elif final_health_pct <= 40.0:
+            verdict = "📉 <b>Risk-Off (Markdown):</b> تراجع في الزخم والسيولة. التداول بحذر والبحث عن صفقات بيع (Short)."
+        elif liquidity_bleeding and onchain['is_valid'] and onchain['score'] < (1.5 if onchain['name'] == 'MVRV Ratio' else 1.2):
+            verdict = "⚠️ <b>Value Trap (Accumulation):</b> السعر رخيص جداً (قاع)، لكن <b>السيولة تنزف</b>. لا يوجد مشترين جدد بعد. صيد القيعان هنا يحتاج لصبر طويل، وليس لرافعة مالية."
         else:
-            pain_text = f" نحو <code>${opt['max_pain']:,.0f}</code>" if opt['is_valid'] else " حول المتوسطات السعرية"
-            verdict = f"⚖️ <b>Pegging Phase (Equilibrium):</b> توازن كلي. صناع السوق سيجذبون السعر مغناطيسياً{pain_text} لحرق عقود المتداولين العشوائيين لكلا الطرفين (Chop Zone)."
+            verdict = "⚖️ <b>Equilibrium (Chop Zone):</b> توازن كلي. السيولة تحافظ على استقرارها وسيحاول صناع السوق ضرب الجانبين في نطاق عرضي."
 
-        pc_status = "سلبية (طمع في الكول) 🔴" if opt['pc_ratio'] < 0.6 else ("إيجابية (خوف وتحوط) 🟢" if opt['pc_ratio'] > 1.2 else "حيادية ⚪")
-        source_note = "CoinMetrics (On-Chain)" if onchain['is_onchain'] else "Binance (Mayer Proxy)"
+        # تجهيز نصوص العرض
+        onchain_status = "قاع سحيق 🟢" if final_health_pct > 75 else "تجميع 🟡" if final_health_pct > 40 else "قمة 🔴"
+        pc_status = "سلبية (طمع) 🔴" if opt['pc_ratio'] < 0.6 else ("إيجابية (خوف) 🟢" if opt['pc_ratio'] > 1.2 else "حيادية ⚪")
         
-        liq_display = f"${liq['current_liquidity_B']:.2f} مليار" if liq['is_valid'] else "⚠️ البيانات متأخرة"
-        pain_display = f"${opt['max_pain']:,.0f}" if opt['is_valid'] else "⚠️ خادم Deribit يواجه ضغطاً"
-        oi_display = f"{opt['total_oi_btc']:,.0f} BTC" if opt['is_valid'] else "N/A"
+        liq_display = f"${liq['current_liquidity_B']:.2f} مليار" if liq['is_valid'] else "⚠️ مزود البيانات لا يستجيب"
+        pain_display = f"${opt['max_pain']:,.0f}" if opt['max_pain'] > 0 else f"⚠️ تم التحويل لـ ({opt['source']})"
+        oi_display = f"{opt['total_oi_btc']:,.0f} عقد" if opt['is_valid'] else "N/A"
 
         report = f"""
-🏛 <b>APEX VANGUARD | الماكرو المطلق (Absolute Macro V4)</b> 🏛
+🏛 <b>APEX VANGUARD | الماكرو المطلق (V5 Cartel Edition)</b> 🏛
 ━━━━━━━━━━━━━━━━━━
 🌐 <b>المحرك الأول: سيولة الفيات (Stablecoins & ETFs):</b>
 • <b>طباعة التيثر/USDC:</b> <code>{liq_display}</code> (تدفق 90 يوم: {liq['change_90d']:+.2f}%)
 • <b>صناديق وول ستريت (IBIT):</b> <code>{etf['status']}</code>
 
-🧱 <b>المحرك الثاني: تقييم الحيتان الكلي ({source_note}):</b>
-• <b>مؤشر {onchain['name']}:</b> <code>{onchain['value']:.2f}</code>
-• <b>موقعنا في الدورة:</b> <b>{onchain['status']}</b>
+🧱 <b>المحرك الثاني: تقييم الحيتان الكلي ({onchain['name']}):</b>
+• <b>المؤشر اللحظي:</b> <code>{onchain['value']:.2f}</code>
+• <b>موقعنا في الدورة:</b> <b>{onchain_status}</b>
 
-⏳ <b>المحرك الثالث: مركز ثقل الخيارات (Dealers GEX - Front Month):</b>
-• <b>نقطة الألم الأقصى (Max Pain):</b> <code>{pain_display}</code> 🧲
+⏳ <b>المحرك الثالث: مزاج المؤسسات ({opt['source']}):</b>
+• <b>نقطة الألم الأقصى:</b> <code>{pain_display}</code> 🧲
 • <b>نسبة البوت/كول (P/C Ratio):</b> <code>{opt['pc_ratio']:.2f}</code> ({pc_status})
 • <b>إجمالي العقود النشطة:</b> <code>{oi_display}</code>
 
-🧭 <b>الاتجاه الاستراتيجي الأكبر للمؤسسات:</b>
+🧭 <b>مؤشر الصحة الكلية (Macro Health): {final_health_pct:.1f}%</b>
 {verdict}
 ━━━━━━━━━━━━━━━━━━
-<i>* Data Engine: DefiLlama | Wall St ETFs | {source_note} | Deribit (Filtered Expiries).</i>
+<i>* Engine Features: Wall St Proxy Projection | Liquidity Gatekeeper | Dynamic Weights.</i>
 """
         return report
 
+# ====================================================================
+# 💬 مُستقبل الأوامر من تيليجرام (Telegram Command Handler)
+# ====================================================================
 @dp.message(Command("btc_o"))
 async def absolute_macro_command(message: types.Message):
+    # 🛡️ حماية الغرفة المغلقة (Tier-1)
     ALLOWED_IDS = [565965404, 7146339698, ADMIN_USER_ID] 
     if message.from_user.id not in ALLOWED_IDS:
         return await message.reply("🚫 <b>Access Denied. Tier-1 Clearance Required.</b>", parse_mode=ParseMode.HTML)
 
     loading_text = (
-        "📡 <i>تهيئة محرك الماكرو المطلق (V4 Cartel Edition)...</i>\n"
+        "📡 <i>تهيئة محرك الماكرو المطلق (V5 Cartel Edition)...</i>\n"
         "<i>1️⃣ مسح السيولة المزدوجة (DefiLlama + Wall St ETFs)...</i>\n"
         "<i>2️⃣ فحص البلوكتشين وتقييم مراكز الحيتان...</i>\n"
         "<i>3️⃣ فلترة دفاتر Deribit للعقود القريبة وتحديد الألم الأقصى...</i> 🦅"
@@ -5817,8 +5843,9 @@ async def absolute_macro_command(message: types.Message):
         report = await engine.generate_institutional_report()
         await processing_msg.edit_text(report, parse_mode=ParseMode.HTML)
     except Exception as e:
-        error_msg = f"⚠️ <b>حدث خطأ غير متوقع في النواة:</b>\n<code>{str(e)}</code>"
+        error_msg = f"⚠️ <b>حدث خطأ أثناء معالجة بيانات الماكرو:</b>\n<code>{str(e)}</code>"
         await processing_msg.edit_text(error_msg, parse_mode=ParseMode.HTML)
+
 # 1. أمر طلب الـ ID
 @dp.message(Command("manage"))
 async def manage_cmd(m: types.Message, state: FSMContext):
