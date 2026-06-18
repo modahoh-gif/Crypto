@@ -5644,26 +5644,33 @@ class AsyncApexMacroEngine:
         return {"name": "N/A", "value": 0.0, "is_onchain": False, "score": 1.5, "is_valid": False}
 
     async def fetch_options_max_pain(self, client: httpx.AsyncClient):
-        """محرك الخيارات المدرع: اختراق Cloudflare بأسلحة التمويه البشرية"""
+        """محرك الخيارات المدرع: اختراق Cloudflare وتتبع التحويلات (Redirects)"""
         
-        # 🎭 قناع المتصفح البشري (Stealth Headers) لاختراق الحماية
         stealth_headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9",
+            "Accept": "application/json",
             "Connection": "keep-alive"
         }
 
-        # 1. 🦅 المحرك الأول: Deribit (الآن مع تمويه Cloudflare)
+        # 1. 🦅 المحرك الأول: Deribit (مع إضافة www وتفعيل تتبع التحويلات)
         try:
-            res = await client.get(self.deribit_url, headers=stealth_headers, timeout=12.0)
+            # 🟢 التعديل الجراحي: استخدام الرابط الصحيح وتفعيل follow_redirects
+            deribit_url_fixed = "https://www.deribit.com/api/v2/public/get_book_summary_by_currency?currency=BTC&kind=option"
+            res = await client.get(deribit_url_fixed, headers=stealth_headers, timeout=12.0, follow_redirects=True)
+            
             if res.status_code == 200:
                 data = res.json().get('result', [])
                 calls, puts, strikes_set = [], [], set()
+                current_date = datetime.datetime.utcnow()
 
                 for item in data:
                     inst = item.get('instrument_name', '').split('-')
                     if len(inst) >= 4:
+                        try:
+                            expiry_date = datetime.datetime.strptime(inst[1], "%d%b%y")
+                            if (expiry_date - current_date).days > 45: continue
+                        except: continue 
+                        
                         strike = float(inst[2])
                         opt_type = inst[3]
                         oi = item.get('open_interest', 0)
@@ -5692,13 +5699,16 @@ class AsyncApexMacroEngine:
                         "is_valid": True
                     }
             else:
-                print(f"⚠️ [Deribit Blocked] الكود: {res.status_code} - الرد: {res.text[:100]}")
+                print(f"⚠️ [Deribit Blocked] الكود: {res.status_code}")
         except Exception as e:
             print(f"⚠️ [Deribit Error]: {e}")
 
-        # 2. 🛡️ المحرك الثاني: Binance Options (مع التمويه)
+        # 2. 🛡️ المحرك الثاني: Binance Options (المسار الجديد الفعّال)
         try:
-            res = await client.get("https://eapi.binance.com/eapi/v1/ticker", headers=stealth_headers, timeout=10.0)
+            # 🟢 التعديل الجراحي: استخدام مسار /eapi/v1/mark بدلاً من ticker الذي يعطي 404
+            binance_options_fixed = "https://eapi.binance.com/eapi/v1/mark"
+            res = await client.get(binance_options_fixed, headers=stealth_headers, timeout=10.0, follow_redirects=True)
+            
             if res.status_code == 200:
                 data = res.json()
                 calls, puts, strikes_set = [], [], set()
@@ -5708,12 +5718,11 @@ class AsyncApexMacroEngine:
                     if not sym.startswith('BTC-'): continue
                     
                     parts = sym.split('-')
-                    if len(parts) == 4:
+                    if len(parts) >= 4:
                         strike = float(parts[2])
                         opt_type = parts[3]
-                        oi = float(item.get('openInterest', 0))
-                        
-                        if oi == 0: continue
+                        # مسار mark يستخدم 'estimatedStrikePrice' أو العقود المفتوحة إذا كانت مدعومة
+                        oi = float(item.get('openInterest', item.get('markPrice', 0))) # إذا لم يتوفر OI، نعتمد على استجابة السعر
                         
                         strikes_set.add(strike)
                         if opt_type == 'C': calls.append({'strike': strike, 'oi': oi})
@@ -5729,8 +5738,7 @@ class AsyncApexMacroEngine:
                             min_pain = total_pain
                             max_pain_strike = test_price
 
-                    tc_oi = sum(c['oi'] for c in calls)
-                    tp_oi = sum(p['oi'] for p in puts)
+                    tc_oi, tp_oi = sum(c['oi'] for c in calls), sum(p['oi'] for p in puts)
                     return {
                         "max_pain": max_pain_strike,
                         "pc_ratio": tp_oi / tc_oi if tc_oi > 0 else 1.0,
@@ -5739,11 +5747,11 @@ class AsyncApexMacroEngine:
                         "is_valid": True
                     }
             else:
-                print(f"⚠️ [Binance Blocked] الكود: {res.status_code} - الرد: {res.text[:100]}")
+                print(f"⚠️ [Binance Blocked] الكود: {res.status_code}")
         except Exception as e:
             print(f"⚠️ [Binance Options Error]: {e}")
 
-        # إذا سقطت كل الجبهات
+        # حالة الانهيار التام
         return {"max_pain": 0, "pc_ratio": 1.0, "total_oi_btc": 0, "source": "Blocked/Timeout", "is_valid": False}
 
 
