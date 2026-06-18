@@ -5644,60 +5644,19 @@ class AsyncApexMacroEngine:
         return {"name": "N/A", "value": 0.0, "is_onchain": False, "score": 1.5, "is_valid": False}
 
     async def fetch_options_max_pain(self, client: httpx.AsyncClient):
-        """محرك الخيارات المطلق (Zero-Fail Engine): Binance Options + Deribit"""
+        """محرك الخيارات المدرع: اختراق Cloudflare بأسلحة التمويه البشرية"""
         
-        # 1. 🦅 المحرك الأول: Binance Options (مستقر جداً، لا يطلب كوكيز، ولا ينهار)
+        # 🎭 قناع المتصفح البشري (Stealth Headers) لاختراق الحماية
+        stealth_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Connection": "keep-alive"
+        }
+
+        # 1. 🦅 المحرك الأول: Deribit (الآن مع تمويه Cloudflare)
         try:
-            res = await client.get("https://eapi.binance.com/eapi/v1/ticker", timeout=10.0)
-            if res.status_code == 200:
-                data = res.json()
-                calls, puts, strikes_set = [], [], set()
-
-                for item in data:
-                    sym = item.get('symbol', '')
-                    if not sym.startswith('BTC-'): continue
-                    
-                    parts = sym.split('-')
-                    if len(parts) == 4:
-                        strike = float(parts[2])
-                        opt_type = parts[3]
-                        oi = float(item.get('openInterest', 0))
-                        
-                        if oi == 0: continue
-                        
-                        strikes_set.add(strike)
-                        if opt_type == 'C': calls.append({'strike': strike, 'oi': oi})
-                        else: puts.append({'strike': strike, 'oi': oi})
-
-                if strikes_set:
-                    strikes = sorted(list(strikes_set))
-                    min_pain = float('inf')
-                    max_pain_strike = 0
-
-                    for test_price in strikes:
-                        total_pain = sum((test_price - c['strike']) * c['oi'] for c in calls if test_price > c['strike'])
-                        total_pain += sum((p['strike'] - test_price) * p['oi'] for p in puts if test_price < p['strike'])
-                        
-                        if total_pain < min_pain:
-                            min_pain = total_pain
-                            max_pain_strike = test_price
-
-                    tc_oi = sum(c['oi'] for c in calls)
-                    tp_oi = sum(p['oi'] for p in puts)
-                    
-                    return {
-                        "max_pain": max_pain_strike,
-                        "pc_ratio": tp_oi / tc_oi if tc_oi > 0 else 1.0,
-                        "total_oi_btc": tc_oi + tp_oi,
-                        "source": "Binance Options",
-                        "is_valid": True
-                    }
-        except Exception as e:
-            print(f"⚠️ [Macro] Binance Options Error: {e}")
-
-        # 2. 🛡️ المحرك الثاني: Deribit (بعد تدمير كود فلترة التواريخ الذي كان يسبب الكراش)
-        try:
-            res = await client.get(self.deribit_url, timeout=10.0)
+            res = await client.get(self.deribit_url, headers=stealth_headers, timeout=12.0)
             if res.status_code == 200:
                 data = res.json().get('result', [])
                 calls, puts, strikes_set = [], [], set()
@@ -5708,7 +5667,6 @@ class AsyncApexMacroEngine:
                         strike = float(inst[2])
                         opt_type = inst[3]
                         oi = item.get('open_interest', 0)
-                        
                         if oi == 0: continue
 
                         strikes_set.add(strike)
@@ -5733,11 +5691,61 @@ class AsyncApexMacroEngine:
                         "source": "Deribit", 
                         "is_valid": True
                     }
+            else:
+                print(f"⚠️ [Deribit Blocked] الكود: {res.status_code} - الرد: {res.text[:100]}")
         except Exception as e:
-            print(f"⚠️ [Macro] Deribit Error: {e}")
+            print(f"⚠️ [Deribit Error]: {e}")
 
-        # إذا سقط الاثنان (مستحيل رياضياً وتقنياً)
-        return {"max_pain": 0, "pc_ratio": 1.0, "total_oi_btc": 0, "source": "N/A", "is_valid": False}
+        # 2. 🛡️ المحرك الثاني: Binance Options (مع التمويه)
+        try:
+            res = await client.get("https://eapi.binance.com/eapi/v1/ticker", headers=stealth_headers, timeout=10.0)
+            if res.status_code == 200:
+                data = res.json()
+                calls, puts, strikes_set = [], [], set()
+
+                for item in data:
+                    sym = item.get('symbol', '')
+                    if not sym.startswith('BTC-'): continue
+                    
+                    parts = sym.split('-')
+                    if len(parts) == 4:
+                        strike = float(parts[2])
+                        opt_type = parts[3]
+                        oi = float(item.get('openInterest', 0))
+                        
+                        if oi == 0: continue
+                        
+                        strikes_set.add(strike)
+                        if opt_type == 'C': calls.append({'strike': strike, 'oi': oi})
+                        else: puts.append({'strike': strike, 'oi': oi})
+
+                if strikes_set:
+                    strikes = sorted(list(strikes_set))
+                    min_pain, max_pain_strike = float('inf'), 0
+                    for test_price in strikes:
+                        total_pain = sum((test_price - c['strike']) * c['oi'] for c in calls if test_price > c['strike'])
+                        total_pain += sum((p['strike'] - test_price) * p['oi'] for p in puts if test_price < p['strike'])
+                        if total_pain < min_pain:
+                            min_pain = total_pain
+                            max_pain_strike = test_price
+
+                    tc_oi = sum(c['oi'] for c in calls)
+                    tp_oi = sum(p['oi'] for p in puts)
+                    return {
+                        "max_pain": max_pain_strike,
+                        "pc_ratio": tp_oi / tc_oi if tc_oi > 0 else 1.0,
+                        "total_oi_btc": tc_oi + tp_oi,
+                        "source": "Binance Options",
+                        "is_valid": True
+                    }
+            else:
+                print(f"⚠️ [Binance Blocked] الكود: {res.status_code} - الرد: {res.text[:100]}")
+        except Exception as e:
+            print(f"⚠️ [Binance Options Error]: {e}")
+
+        # إذا سقطت كل الجبهات
+        return {"max_pain": 0, "pc_ratio": 1.0, "total_oi_btc": 0, "source": "Blocked/Timeout", "is_valid": False}
+
 
     async def generate_institutional_report(self):
         """الدمج النهائي وصناعة القرار الكمّي (The Cartel Verdict)"""
