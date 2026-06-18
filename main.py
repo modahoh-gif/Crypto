@@ -5647,7 +5647,7 @@ class AsyncApexMacroEngine:
         """محرك الخيارات: Deribit (Crypto) مع جسر وول ستريت BITO ETF (Wall St Proxy)"""
         # 1. 🛡️ المحاولة الأولى: Deribit (Filtered Front-Month)
         try:
-            res = await client.get(self.deribit_url, timeout=6.0)
+            res = await client.get(self.deribit_url, timeout=12.0)
             if res.status_code == 200:
                 data = res.json().get('result', [])
                 calls, puts, strikes = [], [], set()
@@ -5681,7 +5681,7 @@ class AsyncApexMacroEngine:
         # 2. 🦅 البديل المرعب: BITO ETF Options (Wall Street Proxy)
         try:
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-            res_bito = await client.get(self.bito_options_url, headers=headers, timeout=8.0)
+            res_bito = await client.get(self.bito_options_url, headers=headers, timeout=12.0)
             if res_bito.status_code == 200:
                 data = res_bito.json().get('optionChain', {}).get('result', [])[0]
                 
@@ -5707,7 +5707,7 @@ class AsyncApexMacroEngine:
                 
                 # الإسقاط الكمّي على البيتكوين (Synthetic Projection)
                 bito_pain_ratio = max_pain_strike_bito / bito_spot
-                res_btc_spot = await client.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", timeout=3.0)
+                res_btc_spot = await client.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", timeout=5.0)
                 btc_spot_price = float(res_btc_spot.json()['price'])
                 
                 projected_btc_max_pain = btc_spot_price * bito_pain_ratio
