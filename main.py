@@ -6775,7 +6775,7 @@ async def broadcast_investment_cmd(m: types.Message):
     )
 
     # تحديد الـ ID المطلوب الإرسال إليه فقط
-    target_id = 7146339698
+    target_id = 565965404
 
     # إشعار الأدمن ببدء العملية
     status_msg = await m.answer("⏳ جاري إرسال التنويه للمستثمر المطلوب، يرجى الانتظار...")
