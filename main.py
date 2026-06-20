@@ -6769,60 +6769,34 @@ async def broadcast_investment_cmd(m: types.Message):
 
     # النص المطلوب إرساله محاط بوسوم <b> لجعله بخط غامق بالكامل
     broadcast_text = (
-        "<b>📢 إعلان فتح باب الاستثمار\n\n"
-        "نعلن عن فتح باب الاستثمار بعائد شهري بناءاً على رأس المال.\n\n"
-        "قيمة الاستثمار:\n"
-        "من 1000$ إلى 10،000$ بعائد 10%\n"
-        "من 10,000$ إلى 20،000$ بعائد 15%\n"
-        "من 20,000$ وأكثر عائد 17%\n\n"
-        "مدة الاستثمار:\n"
-        "يتم احتساب الأرباح بشكل شهري، مع إمكانية سحب رأس المال بعد الشهر الأول.\n\n"
-        "المزايا الإضافية:\n"
-        "-إشارات خاصة للعملات المتوقع صعودها بأكثر من 100%.\n"
-        "-رادار خاص لتتبع حركة البتكوين لمعرفة حالة السوق وتوقيت الدخول الصحيح في السوق.\n\n"
-        "⚠️ تطبق النسبة على المستثمرين القدامى من بداية الشهر القادم.\n\n"
-        "📩 للاشتراك أو الاستفسار:\n"
+        "<b>⚠️ تنويه لجميع المستثمرين الراغبين بالشراء في البتكوين عند الوصول لقاعه سيتم الشراء بقدر مبلغ الاستثمار في البتكوين واخباركم بسعر الشراء لاحتساب النسبة عند الصعود بلاضافة الى نسبة الاستثمار الشهرية ستبقى ثابتة، مع العلم أن نهاية الشهر الحالي هي اخر موعد للتعديل على مبلغ الاستثمار.\n\n"
+        "للاستفسار والتأكيد :\n"
         "@AiCrAdmin</b>"
     )
 
-    pool = dp['db_pool']
-    sent_count = 0
-    failed_count = 0
+    # تحديد الـ ID المطلوب الإرسال إليه فقط
+    target_id = 7146339698
 
     # إشعار الأدمن ببدء العملية
-    status_msg = await m.answer("⏳ جاري إرسال الإعلان لجميع المستخدمين، يرجى الانتظار...")
+    status_msg = await m.answer("⏳ جاري إرسال التنويه للمستثمر المطلوب، يرجى الانتظار...")
 
     try:
-        async with pool.acquire() as conn:
-            # جلب جميع المستخدمين المسجلين في البوت
-            users = await conn.fetch("SELECT user_id FROM users_info")
-            
-        for row in users:
-            uid = row["user_id"]
-            try:
-                await bot.send_message(
-                    chat_id=uid,
-                    text=broadcast_text,
-                    parse_mode=ParseMode.HTML
-                )
-                sent_count += 1
-                # استراحة 0.05 ثانية لتجنب تجاوز حدود تيليجرام (Flood Control)
-                await asyncio.sleep(0.05) 
-            except Exception:
-                # إذا قام المستخدم بحظر البوت أو حذف حسابه
-                failed_count += 1
-                continue
-
-        # تحديث الرسالة بالنتيجة النهائية
+        # إرسال الرسالة للمستثمر المحدد
+        await bot.send_message(
+            chat_id=target_id,
+            text=broadcast_text,
+            parse_mode=ParseMode.HTML
+        )
+        
+        # تحديث الرسالة بالنتيجة النهائية للأدمن
         await status_msg.edit_text(
             f"✅ <b>اكتمل الإرسال!</b>\n\n"
-            f"📨 تم الإرسال بنجاح إلى: <code>{sent_count}</code> مستخدم.\n"
-            f"❌ فشل الإرسال لـ: <code>{failed_count}</code> مستخدم (حظروا البوت)."
+            f"📨 تم إرسال التنويه بنجاح إلى: <code>{target_id}</code>."
         )
 
     except Exception as e:
         print(f"Broadcast Error: {e}")
-        await status_msg.edit_text("⚠️ حدث خطأ أثناء محاولة جلب المستخدمين من قاعدة البيانات.")
+        await status_msg.edit_text("⚠️ حدث خطأ أثناء محاولة الإرسال (قد يكون المستخدم حظر البوت أو أن الـ ID غير صحيح).")
 
 @dp.message(Command("admin"))
 async def admin_cmd(m: types.Message):
