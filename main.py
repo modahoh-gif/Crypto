@@ -6762,41 +6762,59 @@ async def status_cmd(m: types.Message):
         print(f"Status Error: {e}")
     
 @dp.message(Command("send"))
-async def broadcast_investment_cmd(m: types.Message):
+async def broadcast_update_cmd(m: types.Message):
     # التأكد من أن الأمر للأدمن فقط
     if m.from_user.id != ADMIN_USER_ID:
         return await m.answer("❌ لا تملك صلاحية استخدام هذا الأمر.")
 
-    # النص المطلوب إرساله محاط بوسوم <b> لجعله بخط غامق بالكامل
+    # صياغة رسالة التحديث بأسلوب احترافي
     broadcast_text = (
-        "<b>⚠️ تنويه لجميع المستثمرين الراغبين بالشراء في البتكوين عند الوصول لقاعه سيتم الشراء بقدر مبلغ الاستثمار في البتكوين واخباركم بسعر الشراء لاحتساب النسبة عند الصعود بلاضافة الى نسبة الاستثمار الشهرية ستبقى ثابتة، مع العلم أن نهاية الشهر الحالي هي اخر موعد للتعديل على مبلغ الاستثمار.\n\n"
-        "للاستفسار والتأكيد :\n"
-        "@AiCrAdmin</b>"
+        "<b>⚠️ إشعار ترقية وتحديث هام ⚠️</b>\n\n"
+        "في إطار سعينا المستمر لتقديم أسرع وأدق تجربة تحليل، تم إطلاق <b>نسخة محدثة بالكامل</b> من محرك البوت لضمان سرعة استجابة فائقة وتنفيذ لحظي للبيانات.\n\n"
+        "🚀 <b>يرجى الانتقال فوراً واستخدام البوت المحدث عبر المعرف التالي:</b>\n"
+        "👉 @Naifchartbot\n\n"
+        "<i>*ملاحظة: سيتم إيقاف العمل بهذه النسخة الحالية قريباً. نشكر ثقتكم ونراكم في النسخة الجديدة المسرّعة!</i>"
     )
 
-    # تحديد الـ ID المطلوب الإرسال إليه فقط
-    target_id = 565965404
+    pool = dp['db_pool']
+    sent_count = 0
+    failed_count = 0
+    excluded_id = 2021987994 # الـ ID المستثنى من الإرسال
 
     # إشعار الأدمن ببدء العملية
-    status_msg = await m.answer("⏳ جاري إرسال التنويه للمستثمر المطلوب، يرجى الانتظار...")
+    status_msg = await m.answer("⏳ جاري إرسال إشعار الانتقال لجميع مشتركي VIP (الحاليين والمنتهين)...")
 
     try:
-        # إرسال الرسالة للمستثمر المحدد
-        await bot.send_message(
-            chat_id=target_id,
-            text=broadcast_text,
-            parse_mode=ParseMode.HTML
-        )
-        
+        async with pool.acquire() as conn:
+            # جلب جميع المشتركين المدفوعين واستثناء الـ ID المطلوب
+            users = await conn.fetch("SELECT user_id FROM paid_users WHERE user_id != $1", excluded_id)
+            
+        for row in users:
+            uid = row["user_id"]
+            try:
+                await bot.send_message(
+                    chat_id=uid,
+                    text=broadcast_text,
+                    parse_mode=ParseMode.HTML
+                )
+                sent_count += 1
+                # استراحة 0.05 ثانية لتجنب حظر تيليجرام (Flood Control)
+                await asyncio.sleep(0.05) 
+            except Exception:
+                # إذا قام المستخدم بحظر البوت أو حذف حسابه
+                failed_count += 1
+                continue
+
         # تحديث الرسالة بالنتيجة النهائية للأدمن
         await status_msg.edit_text(
             f"✅ <b>اكتمل الإرسال!</b>\n\n"
-            f"📨 تم إرسال التنويه بنجاح إلى: <code>{target_id}</code>."
+            f"📨 تم إرسال الإشعار بنجاح إلى: <code>{sent_count}</code> مشترك.\n"
+            f"❌ فشل الإرسال لـ: <code>{failed_count}</code> (حسابات محذوفة أو حظروا البوت)."
         )
 
     except Exception as e:
         print(f"Broadcast Error: {e}")
-        await status_msg.edit_text("⚠️ حدث خطأ أثناء محاولة الإرسال (قد يكون المستخدم حظر البوت أو أن الـ ID غير صحيح).")
+        await status_msg.edit_text("⚠️ حدث خطأ أثناء محاولة جلب المستخدمين من قاعدة البيانات.")
 
 @dp.message(Command("admin"))
 async def admin_cmd(m: types.Message):
