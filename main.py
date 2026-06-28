@@ -6816,7 +6816,7 @@ async def broadcast_update_cmd(m: types.Message):
         print(f"Broadcast Error: {e}")
         await status_msg.edit_text("⚠️ حدث خطأ أثناء محاولة جلب المستخدمين من قاعدة البيانات.")
 
-@dp.message(Command("admin"))
+@dp.message(Command("addddmaaahd"))
 async def admin_cmd(m: types.Message):
     await m.answer(
         "📌 للتواصل مع الدعم، يرجى التواصل مع هذا الحساب:\n@AiCrAdmin\n\n"
