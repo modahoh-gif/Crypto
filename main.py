@@ -64,9 +64,18 @@ async def _patched_binance_get(self, url, *args, **kwargs):
         
         # جلب الووركرز المتاحة وغير المحظورة
         available_bases = [b for b in BINANCE_BASES if b not in active_quarantine or current_time > active_quarantine.get(b, 0)]
-        
         if not available_bases:
-            print("🚨 [Tier-1 Warning] جميع الووركرز تحت التهدئة، جاري الاستعانة بالقائمة الأصلية...")
+            # 🛡️ قاطع الدائرة المؤسساتي (Circuit Breaker)
+            if binance_rate_limit_event.is_set():
+                print("🚨 [Tier-1 Circuit Breaker] اختناق ووركرز الفيوتشرز! إيقاف الطابور...")
+                binance_rate_limit_event.clear() # تحويل الإشارة لحمراء
+                await asyncio.sleep(45) # تهدئة حقيقية
+                QUARANTINED_FUTURES.clear() # تنظيف السجل
+                binance_rate_limit_event.set() # تحويل الإشارة لخضراء ليعبر الجميع
+            else:
+                # إذا كانت الإشارة حمراء مسبقاً، انتظر بصمت حتى تضيء بالأخضر
+                await binance_rate_limit_event.wait()
+                
             available_bases = BINANCE_BASES.copy()
 
         random.shuffle(available_bases)
@@ -121,10 +130,17 @@ async def _patched_binance_get(self, url, *args, **kwargs):
     active_quarantine = QUARANTINED_SPOT
     
     available_bases = [b for b in BINANCE_BASES if b not in active_quarantine or current_time > active_quarantine.get(b, 0)]
-    
     if not available_bases:
-        print("🚨 [Tier-1 Warning] جميع الووركرز محظورة من السبوت! جاري التهدئة...")
-        await asyncio.sleep(30)
+        # 🛡️ قاطع الدائرة المؤسساتي (Circuit Breaker) للسبوت
+        if binance_rate_limit_event.is_set():
+            print("🚨 [Tier-1 Circuit Breaker] اختناق ووركرز السبوت! إيقاف الطابور...")
+            binance_rate_limit_event.clear()
+            await asyncio.sleep(45)
+            QUARANTINED_SPOT.clear()
+            binance_rate_limit_event.set()
+        else:
+            await binance_rate_limit_event.wait()
+            
         available_bases = BINANCE_BASES.copy()
 
     random.shuffle(available_bases)
@@ -783,7 +799,7 @@ async def radar_worker_process(pool):
     عامل القنص اللحظي (Live AI Executioner):
     يستلم العملات من الرادار اللحظي فور دخول سيولة الحيتان، ويقيّمها بالـ AI في نفس الثانية.
     """
-    sem = asyncio.Semaphore(5) 
+    sem = asyncio.Semaphore(2) 
     await asyncio.sleep(10)
     print("👷‍♂️ [Live AI Sniper] جاهز لاصطياد السيولة اللحظية والانفجارات...")
     
@@ -1071,7 +1087,7 @@ async def analyze_short_radar_coin(c, client, market_regime, sem):
 
 
 async def short_radar_worker_process(pool):
-    sem = asyncio.Semaphore(5) 
+    sem = asyncio.Semaphore(2) 
     await asyncio.sleep(15)
     print("🩸 [Live Short Sniper] Ready for execution...")
     
@@ -3061,7 +3077,7 @@ async def get_institutional_vpin(symbol: str, client: httpx.AsyncClient, volume_
         accumulated_vol = 0.0
         
         # 🛡️ سحب بيانات التنفيذ: نطلب صفقات متتالية من الأحدث للأقدم، ثم نعكسها زمنياً
-        for _ in range(5):
+        for _ in range(3):
             await binance_rate_limit_event.wait()
             params = {"symbol": clean_sym, "limit": 1000}
             if last_id:
@@ -4761,7 +4777,7 @@ async def check_btc_gravity_veto(client: httpx.AsyncClient):
 
 async def ai_opportunity_radar(pool):
     print("🚀 تم تشغيل الرادار الشامل (وضع صيد القيعان)...")
-    sem = asyncio.Semaphore(5)
+    sem = asyncio.Semaphore(2)
     
     while True:
         try:
@@ -7794,7 +7810,9 @@ async def lob_shard_worker(shard_id, symbols_chunk):
                         
         except Exception as e:
             print(f"⚠️ [LOB Shard {shard_id}] Reconnecting... Error: {e}")
-            await asyncio.sleep(3)
+            # 🛡️ التشتيت العشوائي (Jitter) لمنع عاصفة إعادة الاتصال
+            await asyncio.sleep(random.uniform(3.0, 7.0))
+
 
 async def institutional_lob_worker(pool):
     """
