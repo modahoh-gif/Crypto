@@ -392,11 +392,11 @@ def update_dynamic_ofi(symbol, new_bids, new_asks):
     if symbol not in INSTITUTIONAL_LOB:
         # تهيئة الذاكرة المتقدمة لـ 5 مستويات بدلاً من مستوى واحد
         INSTITUTIONAL_LOB[symbol] = {
-            "prev_bids": {}, # {price: volume}
+            "prev_bids": {}, 
             "prev_asks": {},
-            "ofi_window": deque(maxlen=600), 
-            "bid_vols": deque(maxlen=60),    
-            "ask_vols": deque(maxlen=60),
+            "ofi_window": deque(maxlen=60), # 60 إطار تكفي جداً (تمثل دقيقة من الضغط اللحظي)
+            "bid_vols": deque(maxlen=20),   # تقليص عنيف لحماية الذاكرة 
+            "ask_vols": deque(maxlen=20),
             # 🛡️ الحفاظ على المتغيرات التوافقية لدالة analyze_orderbook_advanced_manual
             "best_bid": 0.0, "best_bid_vol": 0.0,
             "best_ask": float('inf'), "best_ask_vol": 0.0,
@@ -580,19 +580,23 @@ def train_xgboost_sync(records):
     # صياغة القيود الرتيبة (Monotone Constraints) لكل مخرج بشكل مستقل لمنع الـ Overfitting
     # (1 يعني علاقة طردية حتمية مع الميزات، 0 يعني علاقة حرة يكتشفها النموذج بنفسه)
     # وبما أن MultiOutputRegressor يدرب شجرة منفصلة لكل هدف، نمرر القيد المناسب لكل شجرة
+# 🎯 تحويل الهدف الزمني للوغاريتم لتخفيف تشتت القيم الفلكية (Time Transformation)
+    Y['time_to_surge'] = np.log1p(Y['time_to_surge'])
+    
     base_model = xgb.XGBRegressor(
-        n_estimators=500,          # رفع الكفاءة الاستيعابية لعشرات آلاف الصفقات
-        max_depth=6,               # عمق مثالي لامتصاص العلاقات غير الخطية في السلاسل الضخمة
-        learning_rate=0.02,        # تقليل الخطوة لمنع التذبذب والهروب أثناء النزول الاشتقاقي
-        subsample=0.85, 
+        n_estimators=200,          # تقليل الأشجار بنسبة 60% لتخفيف العبء على الذاكرة
+        max_depth=3,               # تقليم العمق لمنع الحفظ الأعمى (Overfitting)
+        learning_rate=0.05,        # تسريع معدل التعلم لتعويض نقص عدد الأشجار
+        subsample=0.8, 
         colsample_bytree=0.8, 
-        objective='reg:pseudohubererror', # Huber loss هو الأقوى عالمياً للتعامل مع الـ Outliers
+        reg_alpha=1.0,             # (L1) خنق الميزات الضعيفة وإجبارها على الصفر
+        reg_lambda=5.0,            # (L2) عقاب صارم للقيم المتطرفة في السوق
+        objective='reg:pseudohubererror',
         tree_method='hist'
     )
-    
-    # تدريب محرك المخرجات المتعددة مباشرة على القيم الحقيقية المعالجة
     multi_model = MultiOutputRegressor(base_model)
-    multi_model.fit(X, Y) 
+    multi_model.fit(X, Y)
+
     
     global AI_QUANT_MODEL
     # نحفظ النموذج الخام فقط بشكل نقي (Thread-Safe)، تخلصنا من الـ Scaler الملوث كلياً!
@@ -674,11 +678,14 @@ def predict_signal_sync(features: dict):
     # نحولها لمعيار مئوي نقي ومحمي من الخروج عن الحدود (Bounded 0-100)
     confidence_pct = max(0.0, min(100.0, ((predicted_quality + 1.0) / 2.0) * 100.0))
     confidence_pct = round(confidence_pct, 1)
+# استخراج النسب المئوية والساعات الحقيقية
+    entry_drop_pct = max(0.0, float(prediction[1]))
     
-    # استخراج النسب المئوية والساعات الحقيقية مباشرة (Clean, Non-linear Splits)
-    entry_drop_pct = max(0.0, float(prediction[1]))        # لا يمكن أن يكون الارتداد المتوقع سالباً
-    time_to_surge_hours = max(0.1, float(prediction[2]))   # لا يمكن أن يكون الزمن سالباً أو صفراً
-    expected_pump_pct = max(0.0, float(prediction[3]))     # لا يمكن أن يكون الصعود سالباً
+    # 🔄 فك التشفير اللوغاريتمي لإعادة الوقت بالساعات بشكل صحيح
+    raw_time = np.expm1(float(prediction[2]))
+    time_to_surge_hours = max(0.1, raw_time) 
+    
+    expected_pump_pct = max(0.0, float(prediction[3]))
     
     return float(confidence_pct), entry_drop_pct, time_to_surge_hours, expected_pump_pct
     
@@ -727,11 +734,17 @@ async def smart_radar_watchdog(pool):
 
     while True:
         # --- إضافة: تنظيف الذاكرة المؤقتة من العملات الخاملة لمنع انهيار السيرفر ---
+import gc # أضفها في أعلى ملف main.py
+
+# داخل حلقة while True في دوال الرادار اللحظية:
         current_time_cleanup = time.time()
-        # حذف أي عملة لم تتحدث منذ أكثر من ساعة (3600 ثانية)
-        keys_to_delete = [k for k, v in live_market_memory.items() if current_time_cleanup - v['last_update'] > 3600]
+        # حذف أي عملة لم تتحدث منذ 300 ثانية (5 دقائق فقط) بدلاً من ساعة!
+        keys_to_delete = [k for k, v in live_market_memory.items() if current_time_cleanup - v['last_update'] > 300]
         for k in keys_to_delete:
             del live_market_memory[k]
+        
+        gc.collect() # 🧹 تفريغ الذاكرة (RAM) إجبارياً بعد الحذف لمنع الكراش
+        
         # ------------------------------------------------------------
         try:
             async with websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
