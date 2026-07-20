@@ -17,6 +17,7 @@ import datetime
 import websockets
 import math
 import httpx
+import gc
 import random
 from urllib.parse import urlparse, urlunparse
 
@@ -733,8 +734,6 @@ async def smart_radar_watchdog(pool):
     PRICE_SPIKE_THRESHOLD = 0.01   
 
     while True:
-        # --- إضافة: تنظيف الذاكرة المؤقتة من العملات الخاملة لمنع انهيار السيرفر ---
-import gc # أضفها في أعلى ملف main.py
 
 # داخل حلقة while True في دوال الرادار اللحظية:
         current_time_cleanup = time.time()
