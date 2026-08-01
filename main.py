@@ -613,6 +613,7 @@ async def ai_trainer_worker(pool):
         try:
             async with pool.acquire() as conn:
                 # 🟢 التعديل الجراحي الأهم: جلب أعمدة العوائد والانعكاس من الداتابيز لكي لا يحدث خطأ (KeyError)
+                # 🛡️ تحديد السحب بأحدث 25,000 صفقة فقط لضمان تغذية النموذج بأحدث سلوكيات السوق دون تدمير الذاكرة
                 records = await conn.fetch("""
                     SELECT market_regime, sp500_trend_pct, sentiment_score, 
                            vol_z_score, cvd_to_vol_ratio, imbalance_ratio, 
@@ -625,8 +626,10 @@ async def ai_trainer_worker(pool):
                            ret_1h, ret_4h, ret_24h, ret_3d, ret_7d
                     FROM ml_training_data 
                     WHERE is_processed = 1
+                    ORDER BY id DESC
+                    LIMIT 25000
                 """)
-                
+
                 if len(records) >= 100: # 🎯 عتبة الانطلاق (Critical Mass)
                     print(f"🧠 [AI Trainer] Mass training on {len(records)} samples...")
                     records_dict = [dict(r) for r in records]
@@ -734,24 +737,24 @@ async def smart_radar_watchdog(pool):
     PRICE_SPIKE_THRESHOLD = 0.01   
 
     while True:
-
-# داخل حلقة while True في دوال الرادار اللحظية:
-        current_time_cleanup = time.time()
-        # حذف أي عملة لم تتحدث منذ 300 ثانية (5 دقائق فقط) بدلاً من ساعة!
-        keys_to_delete = [k for k, v in live_market_memory.items() if current_time_cleanup - v['last_update'] > 300]
-        for k in keys_to_delete:
-            del live_market_memory[k]
-        
-        gc.collect() # 🧹 تفريغ الذاكرة (RAM) إجبارياً بعد الحذف لمنع الكراش
-        
-        # ------------------------------------------------------------
         try:
             async with websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
                 print("✅ تم الاتصال بنجاح! الرادار اللحظي يعمل الآن.")
                 
+                last_cleanup_time = time.time() # 👈 عداد التنظيف المؤسساتي
+                
                 async for message in ws:
                     data = json.loads(message)
                     current_time = time.time()
+
+                    # 🧹 التنظيف الديناميكي داخل الحلقة (كل 60 ثانية) بدون فقدان البيانات
+                    if current_time - last_cleanup_time > 60:
+                        keys_to_delete = [k for k, v in live_market_memory.items() if current_time - v['last_update'] > 300]
+                        for k in keys_to_delete:
+                            del live_market_memory[k]
+                        import gc
+                        gc.collect()
+                        last_cleanup_time = current_time # تصفير العداد
 
                     for ticker in data:
                         symbol = ticker['s']
@@ -928,15 +931,22 @@ async def apex_short_watchdog(pool):
     short_market_memory = {}
 
     while True:
-        current_time = time.time()
-        keys_to_delete = [k for k, v in short_market_memory.items() if current_time - v['last_update'] > 3600]
-        for k in keys_to_delete: del short_market_memory[k]
-
         try:
             async with websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
+                last_cleanup_time = time.time() # 👈 عداد التنظيف
+                
                 async for message in ws:
                     data = json.loads(message)
                     current_time = time.time()
+                    
+                    # 🧹 تنظيف الذاكرة بأمان كل 60 ثانية
+                    if current_time - last_cleanup_time > 60:
+                        keys_to_delete = [k for k, v in short_market_memory.items() if current_time - v['last_update'] > 3600]
+                        for k in keys_to_delete: 
+                            del short_market_memory[k]
+                        import gc
+                        gc.collect()
+                        last_cleanup_time = current_time
 
                     for ticker in data:
                         symbol = ticker['s']
