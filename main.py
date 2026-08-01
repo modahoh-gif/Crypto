@@ -6021,38 +6021,32 @@ async def minus_month_btn(cb: types.CallbackQuery):
             
     await cb.answer("✅ تمت العملية")
 @dp.message(Command("upgrade_ai_db"))
-async def upgrade_database_scores(m: types.Message):
+async def upgrade_database_scores_bulk(m: types.Message):
     # حماية: للأدمن فقط
     if m.from_user.id != ADMIN_USER_ID: 
         return
         
-    await m.answer("⏳ جاري إعادة تقييم 59 ألف صفقة لدعم السوينغ... قد يستغرق الأمر دقيقة.")
+    await m.answer("🚀 جاري تحديث جميع الصفقات دفعة واحدة داخل عقل قاعدة البيانات... لن يستغرق سوى ثانية!")
     
     pool = dp['db_pool']
-    updated_count = 0
+    
+    # استعلام SQL مؤسساتي يحسب التقييمات داخل Postgres مباشرة
+    bulk_sql = """
+    UPDATE ml_training_data
+    SET trade_quality_score = GREATEST(-1.0, LEAST(1.0, 
+        (COALESCE(max_favorable_excursion, 0.0) - (GREATEST(0.0, COALESCE(max_adverse_excursion, 0.0) - 7.0) * CASE WHEN COALESCE(max_favorable_excursion, 0.0) > 40.0 THEN 0.15 ELSE 0.4 END)) 
+        / 
+        (COALESCE(max_favorable_excursion, 0.0) + (GREATEST(0.0, COALESCE(max_adverse_excursion, 0.0) - 7.0) * CASE WHEN COALESCE(max_favorable_excursion, 0.0) > 40.0 THEN 0.15 ELSE 0.4 END) + 0.1)
+    ))
+    WHERE is_processed = 1;
+    """
     
     try:
         async with pool.acquire() as conn:
-            # نجلب كل الصفقات التي تم تقييمها سابقاً
-            rows = await conn.fetch("SELECT id, max_favorable_excursion, max_adverse_excursion FROM ml_training_data WHERE is_processed = 1")
+            # تنفيذ الاستعلام دفعة واحدة
+            status = await conn.execute(bulk_sql)
             
-            for row in rows:
-                mfe_14d = float(row['max_favorable_excursion'] or 0.0)
-                mae_14d = float(row['max_adverse_excursion'] or 0.0)
-                
-                # 🧠 المعادلة الجديدة المتسامحة (تتجاهل أول 7% من الانعكاس)
-                safe_mae_14d = max(0.0, mae_14d - 7.0)
-                drawdown_penalty = safe_mae_14d * (0.15 if mfe_14d > 40.0 else 0.4)
-                
-                # حساب السكور الجديد
-                new_score = (mfe_14d - drawdown_penalty) / (mfe_14d + drawdown_penalty + 0.1)
-                new_score = max(-1.0, min(1.0, new_score)) # حماية الحدود
-                
-                # تحديث الصف في قاعدة البيانات
-                await conn.execute("UPDATE ml_training_data SET trade_quality_score = $1 WHERE id = $2", new_score, row['id'])
-                updated_count += 1
-                
-        await m.answer(f"✅ تمت العملية بنجاح!\nتم تحديث تقييم {updated_count} صفقة.\nقاعدة البيانات الآن جاهزة بنسبة 100% لتدريب الذكاء الاصطناعي.")
+        await m.answer(f"✅ تمت العملية الصاروخية بنجاح!\nحالة قاعدة البيانات: {status}\n\nالبيانات الآن محدثة بالكامل. يمكنك ترك البوت ليعمل، وعامل التدريب سيقوم بسحب البيانات أوتوماتيكياً.")
         
     except Exception as e:
         await m.answer(f"⚠️ حدث خطأ: {e}")
