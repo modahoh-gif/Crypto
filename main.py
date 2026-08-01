@@ -6020,36 +6020,6 @@ async def minus_month_btn(cb: types.CallbackQuery):
             pass
             
     await cb.answer("✅ تمت العملية")
-@dp.message(Command("upgrade_ai_db"))
-async def upgrade_database_scores_bulk(m: types.Message):
-    # حماية: للأدمن فقط
-    if m.from_user.id != ADMIN_USER_ID: 
-        return
-        
-    await m.answer("🚀 جاري تحديث جميع الصفقات دفعة واحدة داخل عقل قاعدة البيانات... لن يستغرق سوى ثانية!")
-    
-    pool = dp['db_pool']
-    
-    # استعلام SQL مؤسساتي يحسب التقييمات داخل Postgres مباشرة
-    bulk_sql = """
-    UPDATE ml_training_data
-    SET trade_quality_score = GREATEST(-1.0, LEAST(1.0, 
-        (COALESCE(max_favorable_excursion, 0.0) - (GREATEST(0.0, COALESCE(max_adverse_excursion, 0.0) - 7.0) * CASE WHEN COALESCE(max_favorable_excursion, 0.0) > 40.0 THEN 0.15 ELSE 0.4 END)) 
-        / 
-        (COALESCE(max_favorable_excursion, 0.0) + (GREATEST(0.0, COALESCE(max_adverse_excursion, 0.0) - 7.0) * CASE WHEN COALESCE(max_favorable_excursion, 0.0) > 40.0 THEN 0.15 ELSE 0.4 END) + 0.1)
-    ))
-    WHERE is_processed = 1;
-    """
-    
-    try:
-        async with pool.acquire() as conn:
-            # تنفيذ الاستعلام دفعة واحدة
-            status = await conn.execute(bulk_sql)
-            
-        await m.answer(f"✅ تمت العملية الصاروخية بنجاح!\nحالة قاعدة البيانات: {status}\n\nالبيانات الآن محدثة بالكامل. يمكنك ترك البوت ليعمل، وعامل التدريب سيقوم بسحب البيانات أوتوماتيكياً.")
-        
-    except Exception as e:
-        await m.answer(f"⚠️ حدث خطأ: {e}")
 
 @dp.message(Command("clear_radar"))
 async def clear_radar_memory_cmd(m: types.Message):
