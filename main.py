@@ -4051,16 +4051,23 @@ async def analyze_radar_coin(c, client, market_regime, sem):
             if score >= required_score and confluence_count >= required_confluence:    
                 avg_vol_usd_for_depth = avg_vol_20 * price if avg_vol_20 > 0 else 15000.0
                 ws_depth_check = await analyze_orderbook_advanced_manual(symbol, client, price, avg_vol_usd_for_depth)
-
-                # 🧠 محرك السوينغ (Swing Execution Logic):
+                # 🧠 محرك السوينغ وتطهير البيانات (Data Sanitization):                # 🧠 محرك السوينغ (Swing Execution Logic):
                 # في الصفقات التي تستمر لأيام، التلاعب اللحظي (Spoofing) هو ضجيج لا يجب أن يقتل الصفقة الكلية.
                 ob_skewness_val = float(depth_data.get('bid_pressure_ratio', 1.0))
+                current_route = c.get("route", "STEALTH")
                 
-                if ws_depth_check.get('is_spoofed', False) or ws_depth_check.get('is_hollow', False):
-                    print(f"⚠️ {symbol} - تلاعب لحظي (HFT Noise). الصفقة السوينغ مستمرة لكن سيتم تحييد تأثير الأوردر بوك للذكاء الاصطناعي.")
-                    # نحيّد تأثير الأوردر بوك لكي لا يخدع الذكاء الاصطناعي (نجعله محايداً = 1.0)
-                    ob_skewness_val = 1.0 
-                
+                if current_route == "STEALTH":
+                    # إذا كان المسار تجميع صامت، التلاعب يعتبر إيجابياً (حماية النطاق)
+                    if ws_depth_check.get('is_spoofed', False) or ws_depth_check.get('is_hollow', False) or current_imbalance < 0:
+                        print(f"⚠️ {symbol} - تلاعب مؤسساتي مخفي (HFT Noise). سيتم عكس التأثير للذكاء الاصطناعي.")
+                        ob_skewness_val = 1.2 # انحياز إيجابي طفيف بدلاً من السلبية
+                        current_imbalance = 0.0 # تحييد السلبية اللحظية بإعادة تعيين نفس المتغير الأصلي
+                else:
+                    # السلوك القديم للحماية في الانفجارات اللحظية
+                    if ws_depth_check.get('is_spoofed', False) or ws_depth_check.get('is_hollow', False):
+                        print(f"⚠️ {symbol} - تلاعب لحظي (HFT Noise). سيتم تحييد تأثير الأوردر بوك.")
+                        ob_skewness_val = 1.0 
+
                 whale_inflow = await get_whale_inflow_score()
                 micro_volatility = df['close'].tail(20).pct_change().std() * 100
                 cvd_divergence = 1.0 if (price > ema200_val and current_cvd < 0) else -1.0 if (price < ema200_val and current_cvd > 0) else 0.0
@@ -4125,15 +4132,18 @@ async def analyze_radar_coin(c, client, market_regime, sem):
                     # نأخذ أعلى تقييم من نماذج الذكاء الاصطناعي
                     best_ai_score = max(valid_ai_scores)
                     
-                    # ⚖️ القرار النهائي: 75% للذكاء الاصطناعي و 25% للمحرك الكلاسيكي كشبكة أمان
-                    final_score = (best_ai_score * 0.75) + (score * 0.25)
+                    # ⚖️ الدمج الديناميكي المؤسساتي (Dynamic Route Ensembling)
+                    current_route = c.get("route", "STEALTH")
+                    
+                    if current_route == "STEALTH":
+                        # في السوينغ والتجميع: نثق بالتقييم الكمي (الذي يقرأ الدارك بول والماكرو) أكثر من تقلبات AI اللحظية
+                        final_score = (best_ai_score * 0.40) + (score * 0.60)
+                    else:
+                        # في الانفجارات (KINETIC): نثق بحذر الذكاء الاصطناعي لمنع الشراء في القمم
+                        final_score = (best_ai_score * 0.70) + (score * 0.30)
                 else:
-                    # في حال فشل نماذج AI أو عدم تحميلها، نعود للمحرك الكلاسيكي كخطة طوارئ
                     final_score = score 
-                
-                # تنعيم الرقم النهائي وحمايته
-                final_score = round(max(0.0, min(final_score, 99.5)), 1)
-                
+
                 return {
                     "symbol": symbol, "price": price, "score": final_score,
                     "rsi": round(last_rsi, 2), "adx": round(current_adx, 2),
@@ -4550,13 +4560,18 @@ async def ml_inspector_worker(pool):
 
                         mfe_7d, mae_7d = calculate_excursions(klines_7d, entry)
                         mfe_14d, mae_14d = calculate_excursions(klines_14d, entry)
+                        # 🧠 هندسة تقييم السوينغ (Swing-Tolerant Labeling)
+                        # التسامح مع أول 5% من الانعكاس (MAE) لأنها ذبذبة طبيعية (Market Noise)
+                        safe_mae_3d = max(0.0, mae_3d - 3.0)
+                        safe_mae_7d = max(0.0, mae_7d - 5.0)
+                        safe_mae_14d = max(0.0, mae_14d - 7.0)
 
-                        # 🧠 التقييم المبني على السرعة (Velocity) والتسامح مع الانعكاس
-                        score_3d = (mfe_3d - (mae_3d * 1.2)) / (mfe_3d + mae_3d + 0.1)
-                        score_7d = (mfe_7d - mae_7d) / (mfe_7d + mae_7d + 0.1)
+                        score_3d = (mfe_3d - (safe_mae_3d * 1.0)) / (mfe_3d + safe_mae_3d + 0.1)
+                        score_7d = (mfe_7d - (safe_mae_7d * 0.8)) / (mfe_7d + safe_mae_7d + 0.1)
                         
-                        drawdown_penalty_14d = mae_14d * (0.2 if mfe_14d > 50.0 else 0.5)
+                        drawdown_penalty_14d = safe_mae_14d * (0.15 if mfe_14d > 40.0 else 0.4)
                         score_14d = (mfe_14d - drawdown_penalty_14d) / (mfe_14d + drawdown_penalty_14d + 0.1)
+
 
                         # ⚖️ الدمج الهندسي بالأوزان 
                         raw_quality = (score_3d * 0.40) + (score_7d * 0.30) + (score_14d * 0.30)
@@ -6005,6 +6020,42 @@ async def minus_month_btn(cb: types.CallbackQuery):
             pass
             
     await cb.answer("✅ تمت العملية")
+@dp.message(Command("upgrade_ai_db"))
+async def upgrade_database_scores(m: types.Message):
+    # حماية: للأدمن فقط
+    if m.from_user.id != ADMIN_USER_ID: 
+        return
+        
+    await m.answer("⏳ جاري إعادة تقييم 59 ألف صفقة لدعم السوينغ... قد يستغرق الأمر دقيقة.")
+    
+    pool = dp['db_pool']
+    updated_count = 0
+    
+    try:
+        async with pool.acquire() as conn:
+            # نجلب كل الصفقات التي تم تقييمها سابقاً
+            rows = await conn.fetch("SELECT id, max_favorable_excursion, max_adverse_excursion FROM ml_training_data WHERE is_processed = 1")
+            
+            for row in rows:
+                mfe_14d = float(row['max_favorable_excursion'] or 0.0)
+                mae_14d = float(row['max_adverse_excursion'] or 0.0)
+                
+                # 🧠 المعادلة الجديدة المتسامحة (تتجاهل أول 7% من الانعكاس)
+                safe_mae_14d = max(0.0, mae_14d - 7.0)
+                drawdown_penalty = safe_mae_14d * (0.15 if mfe_14d > 40.0 else 0.4)
+                
+                # حساب السكور الجديد
+                new_score = (mfe_14d - drawdown_penalty) / (mfe_14d + drawdown_penalty + 0.1)
+                new_score = max(-1.0, min(1.0, new_score)) # حماية الحدود
+                
+                # تحديث الصف في قاعدة البيانات
+                await conn.execute("UPDATE ml_training_data SET trade_quality_score = $1 WHERE id = $2", new_score, row['id'])
+                updated_count += 1
+                
+        await m.answer(f"✅ تمت العملية بنجاح!\nتم تحديث تقييم {updated_count} صفقة.\nقاعدة البيانات الآن جاهزة بنسبة 100% لتدريب الذكاء الاصطناعي.")
+        
+    except Exception as e:
+        await m.answer(f"⚠️ حدث خطأ: {e}")
 
 @dp.message(Command("clear_radar"))
 async def clear_radar_memory_cmd(m: types.Message):
