@@ -1057,7 +1057,7 @@ async def wall_street_flash_radar(bot):
                             
                             # 🟢 إشارة الشراء (LONG): استسلام الأفراد وابتلاع مؤسساتي
                             # الأفراد باعوا بأكثر من مليون دولار في 5 ثواني، السعر لم يهبط، وأوامر الشراء زادت!
-                            if taker_sell_vol > 1_000_000 and price_change_pct >= -0.015 and bid_growth > 300_000:
+                            if taker_sell_vol > 250_000 and price_change_pct >= -0.015 and bid_growth > 100_000:
                                 alert = (
                                     f"⚡️ <b>[WALL STREET ALERT: LONG]</b> ⚡️\n"
                                     f"━━━━━━━━━━━━━━\n"
@@ -1072,7 +1072,7 @@ async def wall_street_flash_radar(bot):
                                 
                             # 🔴 إشارة البيع (SHORT): فومو الأفراد وتصريف مؤسساتي
                             # الأفراد اشتروا بأكثر من مليون دولار، السعر لم يصعد، وأوامر البيع زادت!
-                            elif taker_buy_vol > 1_000_000 and price_change_pct <= 0.015 and ask_growth > 300_000:
+                            elif taker_buy_vol > 250_000 and price_change_pct <= 0.015 and ask_growth > 100_000:
                                 alert = (
                                     f"🩸 <b>[WALL STREET ALERT: SHORT]</b> 🩸\n"
                                     f"━━━━━━━━━━━━━━\n"
