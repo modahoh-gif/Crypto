@@ -989,6 +989,112 @@ async def apex_short_watchdog(pool):
         except Exception as e:
             print(f"⚠️ Short Watchdog Error: {e} - Reconnecting...")
             await asyncio.sleep(3)
+import asyncio
+import websockets
+import json
+import time
+from collections import deque
+from aiogram.enums import ParseMode
+
+async def wall_street_flash_radar(bot):
+    """
+    [Wall Street Tier-1 Engine] رادار ابتلاع السيولة اللحظي
+    يعمل على فريم 5 ثواني متواصلة لاصطياد تلاعب صناع السوق وانعكاسات الاتجاه.
+    """
+    # نستخدم اتصال WebSocket مزدوج: الصفقات اللحظية (aggTrade) ودفتر الأوامر السريع (depth5)
+    ws_url = "wss://stream.binance.com:9443/stream?streams=btcusdt@aggTrade/btcusdt@depth5@100ms"
+    
+    print("🦅 [Wall Street Matrix] Flash Absorption Radar is ONLINE.")
+    
+    while True:
+        try:
+            async with websockets.connect(ws_url, ping_interval=20, ping_timeout=20) as ws:
+                # متغيرات الذاكرة اللحظية
+                taker_buy_vol = 0.0
+                taker_sell_vol = 0.0
+                last_price = 0.0
+                start_price = 0.0
+                start_time = time.time()
+                
+                # ذاكرة دفتر الأوامر
+                bid_walls = deque(maxlen=20)
+                ask_walls = deque(maxlen=20)
+                
+                async for msg in ws:
+                    data = json.loads(msg)
+                    stream = data.get('stream', '')
+                    payload = data.get('data', {})
+                    
+                    # 1. تحليل الصفقات اللحظية (جهد الأفراد)
+                    if 'aggTrade' in stream:
+                        price = float(payload.get('p', 0))
+                        qty = float(payload.get('q', 0))
+                        is_maker = payload.get('m', False)
+                        
+                        if start_price == 0: start_price = price
+                        last_price = price
+                        trade_usd = price * qty
+                        
+                        if is_maker:
+                            taker_sell_vol += trade_usd  # الأفراد يبيعون بهلع
+                        else:
+                            taker_buy_vol += trade_usd   # الأفراد يشترون بفومو
+                            
+                    # 2. تحليل دفتر الأوامر (نوايا الحيتان)
+                    elif 'depth' in stream:
+                        bids = sum(float(p) * float(q) for p, q in payload.get('bids', []))
+                        asks = sum(float(p) * float(q) for p, q in payload.get('asks', []))
+                        bid_walls.append(bids)
+                        ask_walls.append(asks)
+                        
+                    # 3. محرك اتخاذ القرار (يُقيّم الوضع كل 5 ثواني)
+                    current_time = time.time()
+                    if current_time - start_time >= 5.0:
+                        if len(bid_walls) > 1 and len(ask_walls) > 1:
+                            price_change_pct = ((last_price - start_price) / start_price) * 100
+                            bid_growth = bid_walls[-1] - bid_walls[0]
+                            ask_growth = ask_walls[-1] - ask_walls[0]
+                            
+                            # 🟢 إشارة الشراء (LONG): استسلام الأفراد وابتلاع مؤسساتي
+                            # الأفراد باعوا بأكثر من مليون دولار في 5 ثواني، السعر لم يهبط، وأوامر الشراء زادت!
+                            if taker_sell_vol > 1_000_000 and price_change_pct >= -0.015 and bid_growth > 300_000:
+                                alert = (
+                                    f"⚡️ <b>[WALL STREET ALERT: LONG]</b> ⚡️\n"
+                                    f"━━━━━━━━━━━━━━\n"
+                                    f"💎 <b>العملة:</b> #BTC\n"
+                                    f"💵 <b>السعر اللحظي:</b> <code>${last_price:,.2f}</code>\n"
+                                    f"🩸 <b>هلع الأفراد (بيع):</b> <code>${taker_sell_vol:,.0f}</code>\n"
+                                    f"🧱 <b>جدار الحوت (شراء خفي):</b> <code>+${bid_growth:,.0f}</code>\n"
+                                    f"━━━━━━━━━━━━━━\n"
+                                    f"<i>النتيجة: الحوت ابتلع مليون دولار بيع دون أن يهبط السعر. الدخول LONG الآن!</i>"
+                                )
+                                await bot.send_message(ADMIN_USER_ID, alert, parse_mode=ParseMode.HTML)
+                                
+                            # 🔴 إشارة البيع (SHORT): فومو الأفراد وتصريف مؤسساتي
+                            # الأفراد اشتروا بأكثر من مليون دولار، السعر لم يصعد، وأوامر البيع زادت!
+                            elif taker_buy_vol > 1_000_000 and price_change_pct <= 0.015 and ask_growth > 300_000:
+                                alert = (
+                                    f"🩸 <b>[WALL STREET ALERT: SHORT]</b> 🩸\n"
+                                    f"━━━━━━━━━━━━━━\n"
+                                    f"💎 <b>العملة:</b> #BTC\n"
+                                    f"💵 <b>السعر اللحظي:</b> <code>${last_price:,.2f}</code>\n"
+                                    f"🔥 <b>فومو الأفراد (شراء):</b> <code>${taker_buy_vol:,.0f}</code>\n"
+                                    f"🧱 <b>سقف الحوت (تصريف خفي):</b> <code>+${ask_growth:,.0f}</code>\n"
+                                    f"━━━━━━━━━━━━━━\n"
+                                    f"<i>النتيجة: الحوت استخدم فومو الأفراد كسيولة خروج. الدخول SHORT الآن!</i>"
+                                )
+                                await bot.send_message(ADMIN_USER_ID, alert, parse_mode=ParseMode.HTML)
+                        
+                        # تصفير العدادات للدورة القادمة (نافذة الـ 5 ثواني التالية)
+                        taker_buy_vol = 0.0
+                        taker_sell_vol = 0.0
+                        start_price = last_price
+                        start_time = current_time
+                        
+        except Exception as e:
+            print(f"⚠️ [Flash Radar] Connection reset: {e}. Reconnecting in 3 seconds...")
+            await asyncio.sleep(3)
+
 async def analyze_short_radar_coin(c, client, market_regime, sem):
     """
     [Pure AI Institutional Short Radar]
@@ -9170,6 +9276,8 @@ async def on_startup(app):
     asyncio.create_task(institutional_incubator_worker(pool))
     #asyncio.create_task(institutional_vanguard_worker())
     asyncio.create_task(moe_hot_swap_worker())
+    # تشغيل رادار وول ستريت اللحظي
+    asyncio.create_task(wall_street_flash_radar(bot))
     asyncio.create_task(ai_trainer_worker(pool)) # 🧠 تشغيل مدرب الذكاء الاصطناعي
     asyncio.create_task(ml_inspector_worker(pool)) # 🧠 تشغيل محقق الذكاء الاصطناعي
         # مسح أي تحديثات معلقة تسبب تعليق السيرفر
