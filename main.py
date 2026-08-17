@@ -989,161 +989,6 @@ async def apex_short_watchdog(pool):
         except Exception as e:
             print(f"⚠️ Short Watchdog Error: {e} - Reconnecting...")
             await asyncio.sleep(3)
-import asyncio
-import websockets
-import json
-import time
-import httpx
-from collections import deque
-from aiogram.enums import ParseMode
-
-async def wall_street_flash_radar(bot):
-    """
-    [BTC-Exclusive] Wick Sniper & Wall Front-Runner 🎯
-    مدمج مع فلاتر (Anti-Spoofing) و (CVD Absorption) لضمان أعلى معدل نجاح.
-    """
-    ws_url = "wss://stream.binance.com:9443/stream?streams=btcusdt@aggTrade/btcusdt@depth10@100ms"
-    print("🦅 [BTC Sniper] Ultimate Anti-Spoofing Matrix is ONLINE.")
-    
-    # نفتح اتصال HTTP دائم وخفيف لاستخدامه في التحقق اللحظي عند وجود فرصة
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        while True:
-            try:
-                async with websockets.connect(ws_url, ping_interval=20, ping_timeout=20) as ws:
-                    price_history = deque(maxlen=150) # ذاكرة 15 ثانية تقريباً
-                    taker_sell_window = 0.0
-                    taker_buy_window = 0.0
-                    window_start_time = time.time()
-                    
-                    async for msg in ws:
-                        data = json.loads(msg)
-                        stream = data.get('stream', '')
-                        payload = data.get('data', {})
-                        
-                        current_time = time.time()
-                        
-                        # 1. تتبع الصفقات اللحظية (عزل هلع وفومو الأفراد)
-                        if 'aggTrade' in stream:
-                            price = float(payload.get('p', 0))
-                            qty = float(payload.get('q', 0))
-                            is_maker = payload.get('m', False) 
-                            
-                            price_history.append(price)
-                            trade_usd = price * qty
-                            
-                            if is_maker:
-                                taker_sell_window += trade_usd  
-                            else:
-                                taker_buy_window += trade_usd   
-                                
-                        # 2. تتبع دفتر الأوامر واقتناص الجدران
-                        elif 'depth' in stream and len(price_history) > 50:
-                            bids = payload.get('bids', [])
-                            asks = payload.get('asks', [])
-                            
-                            strongest_bid = max(bids, key=lambda x: float(x[1])) if bids else [0, 0]
-                            strongest_ask = max(asks, key=lambda x: float(x[1])) if asks else [0, 0]
-                            
-                            bid_price, bid_qty = float(strongest_bid[0]), float(strongest_bid[1])
-                            ask_price, ask_qty = float(strongest_ask[0]), float(strongest_ask[1])
-                            
-                            current_price = price_history[-1]
-                            highest_recent = max(price_history)
-                            lowest_recent = min(price_history)
-                            
-                            # تصفير العدادات كل 15 ثانية
-                            if current_time - window_start_time >= 15.0:
-                                taker_buy_window = 0.0
-                                taker_sell_window = 0.0
-                                window_start_time = current_time
-
-                            # ==========================================
-                            # 🟢 إشارة الشراء (LONG): الجدار الدفاعي
-                            # ==========================================
-                            drop_pct = ((highest_recent - current_price) / highest_recent) * 100
-                            if drop_pct >= 0.20 and bid_qty >= 100.0 and taker_sell_window > 500_000:
-                                if abs(current_price - bid_price) / current_price < 0.0005:
-                                    
-                                    # 🛡️ 1. فلتر الجدران الوهمية (Anti-Spoofing Check)
-                                    spoof_data = await analyze_orderbook_spoofing_instant("BTC", client, current_price)
-                                    if spoof_data.get("is_hollow", False):
-                                        print("🚫 [Sniper] إلغاء LONG: الجدار وهمي (Hollow) وسيتم سحبه!")
-                                        price_history.clear()
-                                        continue
-                                        
-                                    # 🛡️ 2. فلتر الامتصاص الحقيقي (CVD Verification)
-                                    _, cvd_sig, cvd_trend = await get_micro_cvd_absorption("BTCUSDT", client, "1m")
-                                    # يجب أن يكون الـ CVD سلبياً (الأفراد يبيعون بهلع) لكي يمتصه الحوت
-                                    if cvd_trend > 0 and cvd_sig != "Micro_Silent_Accumulation":
-                                        print("🚫 [Sniper] إلغاء LONG: لا يوجد امتصاص بيعي حقيقي.")
-                                        price_history.clear()
-                                        continue
-
-                                    # 🎯 اعتماد الإشارة
-                                    entry_price = bid_price * 1.0002 # الدخول قبل الجدار
-                                    target_price = entry_price * 1.0025 # هدف 0.25%
-                                    
-                                    alert = (
-                                        f"🟢 <b>[BTC APEX SNIPER: LIMIT BUY]</b> 🟢\n"
-                                        f"━━━━━━━━━━━━━━\n"
-                                        f"🩸 هبوط خاطف: <code>-{drop_pct:.2f}%</code>\n"
-                                        f"🧱 جدار تم التحقق منه: <code>{bid_qty:.0f} BTC</code> عند <b>${bid_price:,.2f}</b>\n"
-                                        f"🛡️ الامتصاص: <b>مؤكد (CVD سلبي حقيقي)</b>\n"
-                                        f"🛒 <b>أمر الدخول (Maker):</b>\n"
-                                        f"🧲 شراء معلق: <code>${entry_price:,.2f}</code>\n"
-                                        f"🎯 بيع معلق: <code>${target_price:,.2f}</code>\n"
-                                        f"━━━━━━━━━━━━━━\n"
-                                        f"<i>النتيجة: الجدار حقيقي وآمن، الارتداد متوقع بنسبة تفوق 90%.</i>"
-                                    )
-                                    await bot.send_message(ADMIN_USER_ID, alert, parse_mode=ParseMode.HTML)
-                                    price_history.clear()
-                                    await asyncio.sleep(60) # تجميد لعدم التكرار
-
-                            # ==========================================
-                            # 🔴 إشارة البيع (SHORT): جدار التصريف
-                            # ==========================================
-                            spike_pct = ((current_price - lowest_recent) / lowest_recent) * 100
-                            if spike_pct >= 0.20 and ask_qty >= 100.0 and taker_buy_window > 500_000:
-                                if abs(ask_price - current_price) / current_price < 0.0005:
-                                    
-                                    # 🛡️ 1. فلتر الجدران الوهمية (Anti-Spoofing Check)
-                                    spoof_data = await analyze_orderbook_spoofing_instant("BTC", client, current_price)
-                                    if spoof_data.get("is_spoofed", False):
-                                        print("🚫 [Sniper] إلغاء SHORT: جدار البيع للترهيب الوهمي فقط!")
-                                        price_history.clear()
-                                        continue
-                                        
-                                    # 🛡️ 2. فلتر الامتصاص الحقيقي (CVD Verification)
-                                    _, cvd_sig, cvd_trend = await get_micro_cvd_absorption("BTCUSDT", client, "1m")
-                                    # يجب أن يكون الـ CVD إيجابياً (فومو شراء أفراد) لكي يصرف عليهم الحوت
-                                    if cvd_trend < 0 and cvd_sig != "Hidden_Distribution":
-                                        print("🚫 [Sniper] إلغاء SHORT: تصريف الحوت غير مؤكد.")
-                                        price_history.clear()
-                                        continue
-
-                                    # 🎯 اعتماد الإشارة
-                                    entry_price = ask_price * 0.9998 # الدخول تحت الجدار
-                                    target_price = entry_price * 0.9975 # هدف 0.25%
-                                    
-                                    alert = (
-                                        f"🔴 <b>[BTC APEX SNIPER: LIMIT SHORT]</b> 🔴\n"
-                                        f"━━━━━━━━━━━━━━\n"
-                                        f"🔥 فومو خاطف: <code>+{spike_pct:.2f}%</code>\n"
-                                        f"🧱 سقف تم التحقق منه: <code>{ask_qty:.0f} BTC</code> عند <b>${ask_price:,.2f}</b>\n"
-                                        f"🛡️ التفريغ: <b>مؤكد (امتصاص لفومو الأفراد)</b>\n"
-                                        f"🛒 <b>أمر الدخول (Maker):</b>\n"
-                                        f"🧲 بيع معلق: <code>${entry_price:,.2f}</code>\n"
-                                        f"🎯 شراء معلق: <code>${target_price:,.2f}</code>\n"
-                                        f"━━━━━━━━━━━━━━\n"
-                                        f"<i>النتيجة: سقف حقيقي لامتصاص فومو الأفراد، ارتداد هبوطي مؤكد.</i>"
-                                    )
-                                    await bot.send_message(ADMIN_USER_ID, alert, parse_mode=ParseMode.HTML)
-                                    price_history.clear()
-                                    await asyncio.sleep(60) # تجميد لعدم التكرار
-                            
-            except Exception as e:
-                print(f"⚠️ [BTC Sniper] Connection Error: {e}. Reconnecting in 3s...")
-                await asyncio.sleep(3)
 
 async def analyze_short_radar_coin(c, client, market_regime, sem):
     """
@@ -9316,8 +9161,8 @@ async def on_startup(app):
             await conn.execute("INSERT INTO paid_users (user_id) VALUES ($1) ON CONFLICT DO NOTHING", uid)
     asyncio.create_task(apex_btc_tape_worker(pool))
     asyncio.create_task(apex_btc_inspector_worker(pool))
-    asyncio.create_task(apex_short_watchdog(pool))
-    asyncio.create_task(short_radar_worker_process(pool))
+    #asyncio.create_task(apex_short_watchdog(pool))
+    #asyncio.create_task(short_radar_worker_process(pool))
     asyncio.create_task(smart_radar_watchdog(pool))
     asyncio.create_task(institutional_lob_worker(pool))
     asyncio.create_task(silent_data_harvester_worker(pool))
@@ -9326,8 +9171,6 @@ async def on_startup(app):
     asyncio.create_task(institutional_incubator_worker(pool))
     #asyncio.create_task(institutional_vanguard_worker())
     asyncio.create_task(moe_hot_swap_worker())
-    # تشغيل رادار وول ستريت اللحظي
-    asyncio.create_task(wall_street_flash_radar(bot))
     asyncio.create_task(ai_trainer_worker(pool)) # 🧠 تشغيل مدرب الذكاء الاصطناعي
     asyncio.create_task(ml_inspector_worker(pool)) # 🧠 تشغيل محقق الذكاء الاصطناعي
         # مسح أي تحديثات معلقة تسبب تعليق السيرفر
