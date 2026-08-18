@@ -56,74 +56,97 @@ async def _patched_binance_get(self, url, *args, **kwargs):
         return await _original_httpx_get(self, url, *args, **kwargs)
 
     is_futures = parsed_url.path.startswith(('/fapi', '/dapi', '/futures'))
+    current_time = time.time()
+    
+    # تحديد الذاكرة بناءً على نوع الطلب
+    active_quarantine = QUARANTINED_FUTURES if is_futures else QUARANTINED_SPOT
+    
     # =================================================================
-    # 🚀 التعديل المؤسساتي الذهبي: تمرير الفيوتشرز عبر الووركرز الذكية بأمان تام
+    # 🚀 المحرك الذكي الموحد والمحمي من الـ Deadlock
     # =================================================================
-    if is_futures:
-        current_time = time.time()
-        active_quarantine = QUARANTINED_SPOT
+    available_bases = [b for b in BINANCE_BASES if b not in active_quarantine or current_time > active_quarantine.get(b, 0)]
+    
+    if not available_bases:
+        # 🛡️ قاطع الدائرة المؤسساتي (Circuit Breaker) المحمي
+        if binance_rate_limit_event.is_set():
+            layer_name = "الفيوتشرز" if is_futures else "السبوت"
+            print(f"🚨 [Tier-1 Circuit Breaker] اختناق ووركرز {layer_name}! تفعيل دورة التبريد بالخلفية...")
+            binance_rate_limit_event.clear()
+            
+            # إطلاق دورة التبريد كمهمة خلفية مستقلة (لا تعلق طلب المستخدم اليدوي)
+            async def cooldown_task():
+                try:
+                    await asyncio.sleep(25) # تقليص المدة لسرعة التعافي
+                finally:
+                    # هذه الأوامر ستنفذ حتمياً بفضل finally
+                    active_quarantine.clear()
+                    binance_rate_limit_event.set()
+            
+            asyncio.create_task(cooldown_task())
         
-        # جلب الووركرز المتاحة وغير المحظورة
-        available_bases = [b for b in BINANCE_BASES if b not in active_quarantine or current_time > active_quarantine.get(b, 0)]
-        if not available_bases:
-            # 🛡️ قاطع الدائرة المؤسساتي (Circuit Breaker)
-            if binance_rate_limit_event.is_set():
-                print("🚨 [Tier-1 Circuit Breaker] اختناق ووركرز الفيوتشرز! إيقاف الطابور...")
-                binance_rate_limit_event.clear() # تحويل الإشارة لحمراء
-                await asyncio.sleep(45) # تهدئة حقيقية
-                QUARANTINED_FUTURES.clear() # تنظيف السجل
-                binance_rate_limit_event.set() # تحويل الإشارة لخضراء ليعبر الجميع
-            else:
-                # إذا كانت الإشارة حمراء مسبقاً، انتظر بصمت حتى تضيء بالأخضر
-                await binance_rate_limit_event.wait()
-                
-            available_bases = BINANCE_BASES.copy()
+        # 🛡️ انتظار الإشارة الخضراء مع سقف زمني (Timeout) لمنع التعليق النهائي
+        try:
+            await asyncio.wait_for(binance_rate_limit_event.wait(), timeout=10.0)
+        except asyncio.TimeoutError:
+            print("⚠️ [Circuit Timeout] تخطي حظر الووركرز لخدمة الطلب اليدوي للمستخدم...")
+            
+        available_bases = BINANCE_BASES.copy()
 
-        random.shuffle(available_bases)
-        last_response = None
+    random.shuffle(available_bases)
+    last_response = None
 
-        # تمويه هيدرز بالبصمة البشرية الكاملة
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json",
-            "X-MBX-APIKEY": BINANCE_API_KEY
-        }
+    # تمويه هيدرز بالبصمة البشرية (تُطبق للفيوتشرز، ويمكن تطبيقها للسبوت)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+        "X-MBX-APIKEY": BINANCE_API_KEY
+    }
 
-        for base in available_bases:
-            try:
-                base_parsed = urlparse(base)
-                # إعادة صياغة الرابط ليمر من خلال الووركر الذكي
-                new_url = urlunparse((
-                    base_parsed.scheme,
-                    base_parsed.netloc,
-                    parsed_url.path,
-                    parsed_url.params,
-                    parsed_url.query, 
-                    parsed_url.fragment
-                ))
-                
-                # استخدام الدالة الأصلية الخام لمنع الـ Recursion والعبور مباشرة عبر الووركر
+    for base in available_bases:
+        try:
+            base_parsed = urlparse(base)
+            # إعادة صياغة الرابط ليمر من خلال الووركر الذكي
+            new_url = urlunparse((
+                base_parsed.scheme,
+                base_parsed.netloc,
+                parsed_url.path,
+                parsed_url.params,
+                parsed_url.query, 
+                parsed_url.fragment
+            ))
+            
+            # تحديد المعاملات الممررة بناءً على نوع المسار
+            if is_futures:
                 res = await _original_httpx_get(self, new_url, headers=headers, params=kwargs.get('params'))
-                
-                if res.status_code == 200:
-                    return res
-                elif res.status_code in [429, 418, 403, 302]:
-                    print(f"🩸 [Quarantine] عزل الووركر {base_parsed.netloc} للفيوتشرز بسبب الكود {res.status_code}.")
-                    active_quarantine[base] = time.time() + 300
-                    last_response = res
-                    continue
-                else:
-                    last_response = res
-                    continue
-                    
-            except Exception as e:
-                print(f"⚠️ [Worker Error] فشل العبور من {base}: {e}")
+            else:
+                res = await _original_httpx_get(self, new_url, *args, **kwargs)
+                used_weight = int(res.headers.get("x-mbx-used-weight-1m", 0))
+                if used_weight > 2000:
+                    await asyncio.sleep(1.0)
+            
+            # تقييم الاستجابة
+            if res.status_code == 200:
+                return res
+            # إضافة أكواد Cloudflare المزعجة للفلتر (502, 503, 520)
+            elif res.status_code in [429, 418, 403, 302, 502, 503, 520]:
+                layer_name = "الفيوتشرز" if is_futures else "السبوت"
+                print(f"🩸 [Quarantine] عزل الووركر {base_parsed.netloc} لـ {layer_name} | Code: {res.status_code}")
+                active_quarantine[base] = time.time() + 120 # عزل لمدة دقيقتين فقط بدلاً من 5 دقائق
+                last_response = res
+                continue
+            else:
+                last_response = res
                 continue
                 
-        if last_response is None:
-            return httpx.Response(500, request=httpx.Request("GET", url_str))
+        except Exception as e:
+            # صمت هندسي لتجنب إغراق السجلات (Logs) بالأخطاء أثناء تدوير الووركرز
+            continue
             
-        return last_response
+    if last_response is None:
+        return httpx.Response(500, request=httpx.Request("GET", url_str))
+        
+    return last_response
+
     # =================================================================
 
     # 2. مسار السبوت (Spot): يستمر في استخدام الووركرز لتوزيع الحمل بأمان
